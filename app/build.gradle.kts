@@ -6,16 +6,12 @@ plugins {
 
 android {
     namespace = "com.jimtime.wear"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.jimtime.wear"
         minSdk = 30
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
     }
@@ -44,6 +40,7 @@ android {
 
 dependencies {
     implementation(libs.play.services.wearable)
+    implementation(libs.play.services.location)
     implementation(platform(libs.compose.bom))
     implementation(libs.ui)
     implementation(libs.ui.graphics)

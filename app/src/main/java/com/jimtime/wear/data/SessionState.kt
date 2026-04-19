@@ -3,6 +3,7 @@ package com.jimtime.wear.data
 data class SessionState(
     val isActive: Boolean = false,
     val isPaused: Boolean = false,
+    val isStandalone: Boolean = false,
     val activityType: String = "run",
     val startedAt: Long = 0L,
     val elapsedSeconds: Long = 0L,

@@ -36,6 +36,7 @@ fun SessionScreen(
     onStop: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
+    isStandalone: Boolean = false,
 ) {
     JimTimeWearTheme {
         AppScaffold {
@@ -47,6 +48,16 @@ fun SessionScreen(
                     verticalArrangement = Arrangement.SpaceBetween,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    // ── Standalone badge ───────────────────────────────────
+                    if (isStandalone) {
+                        Text(
+                            text = "📵 Standalone",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFFB8C00),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+
                     // ── Timer ──────────────────────────────────────────────
                     Text(
                         text = sessionState.formattedElapsed(),

@@ -10,9 +10,19 @@ object SessionRepository {
 
     fun startSession(type: String, startedAt: Long) {
         _state.value = SessionState(
-            isActive = true,
+            isActive     = true,
             activityType = type,
-            startedAt = startedAt,
+            startedAt    = startedAt,
+            isStandalone = false,
+        )
+    }
+
+    fun startStandaloneSession(type: String) {
+        _state.value = SessionState(
+            isActive     = true,
+            activityType = type,
+            startedAt    = System.currentTimeMillis(),
+            isStandalone = true,
         )
     }
 
@@ -26,6 +36,10 @@ object SessionRepository {
 
     fun resumeSession() {
         _state.value = _state.value.copy(isPaused = false)
+    }
+
+    fun updateDistance(meters: Double) {
+        _state.value = _state.value.copy(distanceMeters = meters)
     }
 
     fun tick() {

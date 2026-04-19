@@ -3,10 +3,13 @@ package com.jimtime.wear.presentation
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.jimtime.wear.data.GpsPoint
 import com.jimtime.wear.data.MessagePaths
+import com.jimtime.wear.data.PendingRouteStore
 import com.jimtime.wear.data.PhoneConnector
 import com.jimtime.wear.data.SessionRepository
 import com.jimtime.wear.data.SessionState
+import com.jimtime.wear.health.GpsTracker
 import com.jimtime.wear.health.WearWorkoutManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -19,6 +22,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     private val workoutManager = WearWorkoutManager(application)
     private val phoneConnector = PhoneConnector(application)
+    private val gpsTracker     = GpsTracker(application)
 
     val sessionState: StateFlow<SessionState> = SessionRepository.state
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SessionState())
@@ -27,24 +31,154 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0.0)
 
     private var timerJob: Job? = null
+    private var hrSendJob: Job? = null
+    private var retryJob: Job? = null
 
     init {
+        startPendingRouteRetry()
         viewModelScope.launch {
             sessionState.collect { state ->
                 when {
                     state.isActive && !state.isPaused -> {
                         workoutManager.startMonitoring()
                         startTimer()
+                        startHrSender()
                     }
-                    state.isPaused -> stopTimer()
+                    state.isPaused -> {
+                        stopTimer()
+                        gpsTracker.stop()
+                    }
                     !state.isActive -> {
                         stopTimer()
+                        stopHrSender()
                         workoutManager.stopMonitoring()
+                        gpsTracker.stop()
                     }
                 }
             }
         }
+
+        // Keep distance in sync with GPS tracker
+        viewModelScope.launch {
+            gpsTracker.points.collect { points ->
+                val meters = computeDistance(points)
+                SessionRepository.updateDistance(meters)
+            }
+        }
     }
+
+    // ── Public actions ────────────────────────────────────────────────────────
+
+    fun startFromWatch(activityType: String) {
+        viewModelScope.launch {
+            val isOutdoor = activityType in listOf("run", "walk", "bike")
+            val reachable = phoneConnector.isPhoneReachable()
+            if (reachable) {
+                // Phone leads GPS — just notify it.
+                val now = System.currentTimeMillis()
+                SessionRepository.startSession(activityType, now)
+                phoneConnector.sendToPhone(
+                    buildStartCmd(activityType, now)
+                )
+            } else {
+                // Standalone: Watch owns GPS.
+                SessionRepository.startStandaloneSession(activityType)
+                if (isOutdoor) gpsTracker.start()
+            }
+        }
+    }
+
+    fun stopFromWatch() {
+        viewModelScope.launch {
+            val state = SessionRepository.state.value
+            if (state.isStandalone) {
+                gpsTracker.stop()
+                val points   = gpsTracker.points.value
+                val endedAt  = System.currentTimeMillis()
+                SessionRepository.stopSession()
+                // Try to sync immediately; if phone unreachable, log warning.
+                val sent = trySendRoute(points, state.activityType, state.startedAt, endedAt)
+                if (!sent) {
+                    PendingRouteStore.save(
+                        getApplication(),
+                        PendingRouteStore.PendingRoute(
+                            points       = points,
+                            activityType = state.activityType,
+                            startedAt    = state.startedAt,
+                            endedAt      = endedAt,
+                        ),
+                    )
+                    startPendingRouteRetry()
+                }
+            } else {
+                phoneConnector.sendToPhone(MessagePaths.CMD_STOP_FROM_WATCH)
+                SessionRepository.stopSession()
+            }
+        }
+    }
+
+    fun pauseFromWatch() {
+        viewModelScope.launch {
+            val state = SessionRepository.state.value
+            if (state.isStandalone) {
+                gpsTracker.stop()
+                SessionRepository.pauseSession()
+            } else {
+                phoneConnector.sendToPhone(MessagePaths.CMD_PAUSE_FROM_WATCH)
+                SessionRepository.pauseSession()
+            }
+        }
+    }
+
+    fun resumeFromWatch() {
+        viewModelScope.launch {
+            val state = SessionRepository.state.value
+            if (state.isStandalone && state.activityType in listOf("run", "walk", "bike")) {
+                gpsTracker.start()
+                SessionRepository.resumeSession()
+            } else {
+                phoneConnector.sendToPhone(MessagePaths.CMD_RESUME_FROM_WATCH)
+                SessionRepository.resumeSession()
+            }
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private fun startPendingRouteRetry() {
+        if (retryJob?.isActive == true) return
+        retryJob = viewModelScope.launch {
+            while (true) {
+                delay(30_000)
+                val pending = PendingRouteStore.load(getApplication()) ?: break
+                val sent = trySendRoute(
+                    pending.points,
+                    pending.activityType,
+                    pending.startedAt,
+                    pending.endedAt,
+                )
+                if (sent) {
+                    PendingRouteStore.clear(getApplication())
+                    break
+                }
+            }
+            retryJob = null
+        }
+    }
+
+    private suspend fun trySendRoute(
+        points: List<GpsPoint>,
+        activityType: String,
+        startedAt: Long,
+        endedAt: Long,
+    ): Boolean {
+        if (!phoneConnector.isPhoneReachable()) return false
+        phoneConnector.sendRouteToPhone(points, activityType, startedAt, endedAt)
+        return true
+    }
+
+    private fun buildStartCmd(type: String, startedAt: Long): String =
+        """{"cmd":"sessionStarted","type":"$type","startedAt":"$startedAt"}"""
 
     private fun startTimer() {
         if (timerJob?.isActive == true) return
@@ -61,29 +195,47 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         timerJob = null
     }
 
-    fun stopFromWatch() {
-        viewModelScope.launch {
-            phoneConnector.sendToPhone(MessagePaths.CMD_STOP_FROM_WATCH)
-            SessionRepository.stopSession()
+    private fun startHrSender() {
+        if (hrSendJob?.isActive == true) return
+        hrSendJob = viewModelScope.launch {
+            while (true) {
+                delay(3_000)
+                val bpm = workoutManager.heartRate.value
+                if (bpm > 0 && !SessionRepository.state.value.isStandalone) {
+                    phoneConnector.sendToPhone(
+                        """{"cmd":"hrUpdate","bpm":$bpm}"""
+                    )
+                }
+            }
         }
     }
 
-    fun pauseFromWatch() {
-        viewModelScope.launch {
-            phoneConnector.sendToPhone(MessagePaths.CMD_PAUSE_FROM_WATCH)
-            SessionRepository.pauseSession()
-        }
+    private fun stopHrSender() {
+        hrSendJob?.cancel()
+        hrSendJob = null
     }
 
-    fun resumeFromWatch() {
-        viewModelScope.launch {
-            phoneConnector.sendToPhone(MessagePaths.CMD_RESUME_FROM_WATCH)
-            SessionRepository.resumeSession()
+    private fun computeDistance(points: List<GpsPoint>): Double {
+        if (points.size < 2) return 0.0
+        var total = 0.0
+        for (i in 1 until points.size) {
+            val a = points[i - 1]
+            val b = points[i]
+            val dLat = Math.toRadians(b.lat - a.lat)
+            val dLng = Math.toRadians(b.lng - a.lng)
+            val h = Math.sin(dLat / 2).let { it * it } +
+                    Math.cos(Math.toRadians(a.lat)) *
+                    Math.cos(Math.toRadians(b.lat)) *
+                    Math.sin(dLng / 2).let { it * it }
+            total += 2 * 6371000.0 * Math.asin(Math.sqrt(h))
         }
+        return total
     }
 
     override fun onCleared() {
         super.onCleared()
         workoutManager.stopMonitoring()
+        gpsTracker.stop()
+        retryJob?.cancel()
     }
 }
