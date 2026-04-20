@@ -31,10 +31,18 @@ import com.jimtime.wear.presentation.theme.JimTimeWearTheme
 private data class ActivityType(val id: String, val label: String, val emoji: String)
 
 private val activityTypes = listOf(
-    ActivityType("gym",  "Palestra",  "🏋️"),
-    ActivityType("run",  "Corsa",     "🏃"),
-    ActivityType("walk", "Camminata", "🚶"),
-    ActivityType("bike", "Bici",      "🚴"),
+    ActivityType("run",            "Corsa",                 "🏃"),
+    ActivityType("walk",           "Camminata",             "🚶"),
+    ActivityType("bike",           "Bici",                  "🚴"),
+    ActivityType("hike",           "Escursione",            "🥾"),
+    ActivityType("trail",          "Trail",                 "🌲"),
+    ActivityType("treadmill_run",  "Tapis roulant corsa",   "🏃"),
+    ActivityType("treadmill_walk", "Tapis roulant cammino", "🚶"),
+    ActivityType("indoor_cycling", "Bici indoor",           "🚴"),
+    ActivityType("meditation",     "Meditazione",           "🧘"),
+    ActivityType("pilates",        "Pilates",               "🤸"),
+    ActivityType("yoga",           "Yoga",                  "🤸"),
+    ActivityType("stretching",     "Stretching",            "🙆"),
 )
 
 @Composable

@@ -9,11 +9,13 @@ object SessionRepository {
     val state: StateFlow<SessionState> = _state.asStateFlow()
 
     fun startSession(type: String, startedAt: Long) {
+        val alreadyElapsed = ((System.currentTimeMillis() - startedAt) / 1000L).coerceAtLeast(0L)
         _state.value = SessionState(
-            isActive     = true,
-            activityType = type,
-            startedAt    = startedAt,
-            isStandalone = false,
+            isActive       = true,
+            activityType   = type,
+            startedAt      = startedAt,
+            elapsedSeconds = alreadyElapsed,
+            isStandalone   = false,
         )
     }
 

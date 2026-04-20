@@ -34,8 +34,21 @@ data class SessionState(
     }
 
     fun activityIcon(): String = when (activityType) {
-        "bike" -> "🚴"
-        "walk" -> "🚶"
-        else   -> "🏃"
+        "run", "treadmill_run"   -> "🏃"
+        "walk", "treadmill_walk" -> "🚶"
+        "bike", "indoor_cycling" -> "🚴"
+        "hike"                   -> "🥾"
+        "trail"                  -> "🌲"
+        "skate"                  -> "🛼"
+        "mtb"                    -> "🚵"
+        "meditation"             -> "🧘"
+        "pilates", "yoga"        -> "🤸"
+        "stretching"             -> "🙆"
+        else                     -> "🏋️"
     }
+
+    fun isIndoor(): Boolean = activityType in setOf(
+        "treadmill_walk", "treadmill_run", "indoor_cycling",
+        "meditation", "pilates", "yoga", "stretching",
+    )
 }

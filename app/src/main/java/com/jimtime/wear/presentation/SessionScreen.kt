@@ -70,8 +70,10 @@ fun SessionScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                     ) {
-                        StatItem(label = "km", value = sessionState.formattedDistance())
-                        StatItem(label = "passo", value = sessionState.formattedPace())
+                        if (!sessionState.isIndoor()) {
+                            StatItem(label = "km", value = sessionState.formattedDistance())
+                            StatItem(label = "passo", value = sessionState.formattedPace())
+                        }
                         if (heartRate > 0) {
                             StatItem(label = "bpm", value = heartRate.toInt().toString())
                         }
