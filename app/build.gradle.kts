@@ -9,7 +9,17 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.jimtime.wear"
+        // Must match the phone app's applicationId
+        // (`jimtime-frontend/android/app/build.gradle`) so that Google
+        // Play recognises this APK as the Wear companion of the JimTime
+        // phone listing and offers an automatic install on the paired
+        // watch when the user installs the phone app.
+        //
+        // Note: `namespace` above stays `com.jimtime.wear` — it scopes
+        // Kotlin packages / the generated R class and is independent of
+        // the Play Store identifier. Changing it would force renaming
+        // every source directory.
+        applicationId = "com.jimtime.gabrielegusmeroli"
         minSdk = 30
         targetSdk = 35
         versionCode = 1

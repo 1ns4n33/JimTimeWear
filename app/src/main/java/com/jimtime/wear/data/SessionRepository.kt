@@ -16,6 +16,8 @@ object SessionRepository {
             startedAt      = startedAt,
             elapsedSeconds = alreadyElapsed,
             isStandalone   = false,
+            kind           = SessionKind.ACTIVITY,
+            workout        = null,
         )
     }
 
@@ -25,6 +27,8 @@ object SessionRepository {
             activityType = type,
             startedAt    = System.currentTimeMillis(),
             isStandalone = true,
+            kind         = SessionKind.ACTIVITY,
+            workout      = null,
         )
     }
 
@@ -49,5 +53,53 @@ object SessionRepository {
         if (current.isActive && !current.isPaused) {
             _state.value = current.copy(elapsedSeconds = current.elapsedSeconds + 1)
         }
+    }
+
+    // ── Workout protocol ─────────────────────────────────────────────────
+
+    fun startWorkoutSession(
+        startedAt: Long,
+        context: WorkoutContext,
+    ) {
+        val alreadyElapsed = ((System.currentTimeMillis() - startedAt) / 1000L).coerceAtLeast(0L)
+        _state.value = SessionState(
+            isActive       = true,
+            activityType   = "workout",
+            startedAt      = startedAt,
+            elapsedSeconds = alreadyElapsed,
+            isStandalone   = false,
+            kind           = SessionKind.WORKOUT,
+            workout        = context,
+        )
+    }
+
+    fun updateWorkoutCursor(
+        cursor: WorkoutCursor,
+        target: WorkoutTarget,
+        completedExercises: Int,
+    ) {
+        val ctx = _state.value.workout ?: return
+        _state.value = _state.value.copy(
+            workout = ctx.copy(
+                cursor = cursor,
+                target = target,
+                completedExercises = completedExercises,
+                // New cursor = new exercise/set, so wipe any stale rest
+                // countdown that was sitting around.
+                restEndAtMs = null,
+            ),
+        )
+    }
+
+    fun startWorkoutRest(restSeconds: Int, restStartedAtMs: Long) {
+        val ctx = _state.value.workout ?: return
+        _state.value = _state.value.copy(
+            workout = ctx.copy(restEndAtMs = restStartedAtMs + restSeconds * 1000L),
+        )
+    }
+
+    fun clearWorkoutRest() {
+        val ctx = _state.value.workout ?: return
+        _state.value = _state.value.copy(workout = ctx.copy(restEndAtMs = null))
     }
 }

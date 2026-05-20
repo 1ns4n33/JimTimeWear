@@ -143,6 +143,38 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // ── Workout actions (kind == WORKOUT) ─────────────────────────────────
+
+    /// "Fatto" tap on the watch. Reps/weight are sent only when the
+    /// athlete adjusted them — null = use the plan target, which the
+    /// phone-side action falls back to.
+    fun completeSetFromWatch(reps: Int?, weight: Double?) {
+        viewModelScope.launch {
+            phoneConnector.sendToPhone(
+                MessagePaths.CMD_COMPLETE_SET,
+                mapOf(
+                    MessagePaths.KEY_KIND to MessagePaths.KIND_WORKOUT,
+                    "reps"   to reps,
+                    "weight" to weight,
+                ),
+            )
+            // Cursor update will arrive from the phone via the
+            // PhoneMessageService — no local state mutation needed.
+        }
+    }
+
+    fun skipRestFromWatch() {
+        viewModelScope.launch {
+            phoneConnector.sendToPhone(
+                MessagePaths.CMD_SKIP_REST,
+                mapOf(MessagePaths.KEY_KIND to MessagePaths.KIND_WORKOUT),
+            )
+            // Optimistic local clear so the watch UI feels instant; the
+            // phone will follow up with a fresh cursor anyway.
+            SessionRepository.clearWorkoutRest()
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun startPendingRouteRetry() {

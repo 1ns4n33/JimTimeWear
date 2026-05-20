@@ -16,13 +16,22 @@ class PhoneConnector(private val context: Context) {
         runCatching { nodeClient.connectedNodes.await().isNotEmpty() }.getOrDefault(false)
 
     suspend fun sendToPhone(cmd: String) {
+        sendToPhone(cmd, emptyMap())
+    }
+
+    /// Variant that carries extra payload keys — used by the workout
+    /// flow to send `kind: "workout"` plus optional reps/weight on
+    /// `completeSet`.
+    suspend fun sendToPhone(cmd: String, extras: Map<String, Any?>) {
         try {
             val nodes = nodeClient.connectedNodes.await()
             if (nodes.isEmpty()) {
                 Log.w("PhoneConnector", "No connected nodes")
                 return
             }
-            val payload = JSONObject(mapOf("cmd" to cmd)).toString().toByteArray()
+            val merged = mutableMapOf<String, Any?>("cmd" to cmd)
+            for ((k, v) in extras) if (v != null) merged[k] = v
+            val payload = JSONObject(merged.toMap()).toString().toByteArray()
             nodes.forEach { node ->
                 messageClient.sendMessage(node.id, MessagePaths.PATH_WATCH, payload).await()
             }
