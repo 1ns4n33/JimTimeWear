@@ -77,6 +77,7 @@ object SessionRepository {
         cursor: WorkoutCursor,
         target: WorkoutTarget,
         completedExercises: Int,
+        restEndAtMs: Long? = null,
     ) {
         val ctx = _state.value.workout ?: return
         _state.value = _state.value.copy(
@@ -84,9 +85,9 @@ object SessionRepository {
                 cursor = cursor,
                 target = target,
                 completedExercises = completedExercises,
-                // New cursor = new exercise/set, so wipe any stale rest
-                // countdown that was sitting around.
-                restEndAtMs = null,
+                // Rest state rides along with the cursor: null = no rest
+                // in progress, which also wipes any stale countdown.
+                restEndAtMs = restEndAtMs,
             ),
         )
     }

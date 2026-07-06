@@ -7,6 +7,8 @@ import com.jimtime.wear.data.GpsPoint
 import com.jimtime.wear.data.MessagePaths
 import com.jimtime.wear.data.PendingRouteStore
 import com.jimtime.wear.data.PhoneConnector
+import com.jimtime.wear.data.PlanDay
+import com.jimtime.wear.data.PlanDaysStore
 import com.jimtime.wear.data.SessionRepository
 import com.jimtime.wear.data.SessionState
 import com.jimtime.wear.health.GpsTracker
@@ -30,11 +32,23 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     val heartRate: StateFlow<Double> = workoutManager.heartRate
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0.0)
 
+    val planDays: StateFlow<List<PlanDay>> = PlanDaysStore.days
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val planName: StateFlow<String> = PlanDaysStore.planName
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
     private var timerJob: Job? = null
     private var hrSendJob: Job? = null
     private var retryJob: Job? = null
 
     init {
+        PlanDaysStore.load(application)
+        // Wear messages aren't cached phone-side: ask for a fresh plan
+        // list in case a push happened while we were disconnected.
+        viewModelScope.launch {
+            phoneConnector.sendToPhone(MessagePaths.CMD_REQUEST_PLAN_DAYS)
+        }
         startPendingRouteRetry()
         viewModelScope.launch {
             sessionState.collect { state ->
@@ -71,6 +85,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     fun startFromWatch(activityType: String) {
         viewModelScope.launch {
+            workoutManager.resetHrAccumulation()
             val isOutdoor = activityType in listOf("run", "walk", "bike")
             val reachable = phoneConnector.isPhoneReachable()
             if (reachable) {
@@ -95,9 +110,16 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 gpsTracker.stop()
                 val points   = gpsTracker.points.value
                 val endedAt  = System.currentTimeMillis()
+                // Capture BEFORE stopSession(): the state collector will
+                // stop the HR sensor when the session goes inactive.
+                val avgHr = workoutManager.hrAverage
+                val maxHr = workoutManager.hrMaxOrNull
                 SessionRepository.stopSession()
-                // Try to sync immediately; if phone unreachable, log warning.
-                val sent = trySendRoute(points, state.activityType, state.startedAt, endedAt)
+                // Try to sync immediately; if phone unreachable, persist
+                // and let the retry loop deliver it at reconnection.
+                val sent = trySendRoute(
+                    points, state.activityType, state.startedAt, endedAt, avgHr, maxHr,
+                )
                 if (!sent) {
                     PendingRouteStore.save(
                         getApplication(),
@@ -106,6 +128,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                             activityType = state.activityType,
                             startedAt    = state.startedAt,
                             endedAt      = endedAt,
+                            avgHr        = avgHr,
+                            maxHr        = maxHr,
                         ),
                     )
                     startPendingRouteRetry()
@@ -147,15 +171,19 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     /// "Fatto" tap on the watch. Reps/weight are sent only when the
     /// athlete adjusted them — null = use the plan target, which the
-    /// phone-side action falls back to.
+    /// phone-side action falls back to. The current cursor is echoed
+    /// so the phone can DROP a tap that raced a group jump.
     fun completeSetFromWatch(reps: Int?, weight: Double?) {
         viewModelScope.launch {
+            val cursor = SessionRepository.state.value.workout?.cursor
             phoneConnector.sendToPhone(
                 MessagePaths.CMD_COMPLETE_SET,
                 mapOf(
                     MessagePaths.KEY_KIND to MessagePaths.KIND_WORKOUT,
                     "reps"   to reps,
                     "weight" to weight,
+                    "groupIndex" to cursor?.groupIndex,
+                    "roundIndex" to cursor?.roundIndex,
                 ),
             )
             // Cursor update will arrive from the phone via the
@@ -175,6 +203,23 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /// Wrist-initiated plan-day start. The session engine lives on the
+    /// phone, so this only works while it's reachable — the callback
+    /// reports false so the UI can tell the athlete to grab the phone.
+    fun startPlanDayFromWatch(week: Int, day: Int, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            if (!phoneConnector.isPhoneReachable()) {
+                onResult(false)
+                return@launch
+            }
+            phoneConnector.sendToPhone(
+                MessagePaths.CMD_START_PLAN_DAY,
+                mapOf("week" to week, "day" to day),
+            )
+            onResult(true)
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun startPendingRouteRetry() {
@@ -188,6 +233,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                     pending.activityType,
                     pending.startedAt,
                     pending.endedAt,
+                    pending.avgHr,
+                    pending.maxHr,
                 )
                 if (sent) {
                     PendingRouteStore.clear(getApplication())
@@ -203,10 +250,13 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         activityType: String,
         startedAt: Long,
         endedAt: Long,
+        avgHr: Double? = null,
+        maxHr: Double? = null,
     ): Boolean {
         if (!phoneConnector.isPhoneReachable()) return false
-        phoneConnector.sendRouteToPhone(points, activityType, startedAt, endedAt)
-        return true
+        return phoneConnector.sendRouteToPhone(
+            points, activityType, startedAt, endedAt, avgHr, maxHr,
+        )
     }
 
     private fun buildStartCmd(type: String, startedAt: Long): String =

@@ -17,6 +17,23 @@ class WearWorkoutManager(context: Context) : SensorEventListener {
     private val _heartRate = MutableStateFlow(0.0)
     val heartRate: StateFlow<Double> = _heartRate.asStateFlow()
 
+    // Session-long accumulation so standalone sessions can deliver a
+    // summary (avg/max) to the phone at reconnection. Reset manually at
+    // session start — stopMonitoring() intentionally leaves it intact so
+    // the summary survives until it is read.
+    private var hrSum = 0.0
+    private var hrCount = 0
+    private var hrMax = 0.0
+
+    val hrAverage: Double? get() = if (hrCount > 0) hrSum / hrCount else null
+    val hrMaxOrNull: Double? get() = if (hrMax > 0) hrMax else null
+
+    fun resetHrAccumulation() {
+        hrSum = 0.0
+        hrCount = 0
+        hrMax = 0.0
+    }
+
     fun startMonitoring() {
         hrSensor?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
@@ -30,7 +47,13 @@ class WearWorkoutManager(context: Context) : SensorEventListener {
 
     override fun onSensorChanged(event: SensorEvent) {
         if (event.sensor.type == Sensor.TYPE_HEART_RATE && event.values.isNotEmpty()) {
-            _heartRate.value = event.values[0].toDouble()
+            val bpm = event.values[0].toDouble()
+            _heartRate.value = bpm
+            if (bpm > 0) {
+                hrSum += bpm
+                hrCount++
+                if (bpm > hrMax) hrMax = bpm
+            }
         }
     }
 

@@ -32,4 +32,17 @@ object MessagePaths {
     const val CMD_STOP_FROM_WATCH  = "stopActivity"
     const val CMD_PAUSE_FROM_WATCH = "pauseActivity"
     const val CMD_RESUME_FROM_WATCH = "resumeActivity"
+
+    // Plan days: phone pushes the active plan's day list; the watch can
+    // browse it offline and ask the phone to start one (needs phone).
+    // Unlike iOS applicationContext, Wear messages aren't cached — the
+    // watch re-requests the list at launch to cover missed pushes.
+    const val CMD_PLAN_DAYS         = "planDays"
+    const val CMD_START_PLAN_DAY    = "startPlanDay"
+    const val CMD_REQUEST_PLAN_DAYS = "requestPlanDays"
+
+    // Standalone session delivery at reconnection: with GPS points =
+    // routeSync, without (indoor on the wrist) = sessionSync.
+    const val CMD_ROUTE_SYNC   = "routeSync"
+    const val CMD_SESSION_SYNC = "sessionSync"
 }

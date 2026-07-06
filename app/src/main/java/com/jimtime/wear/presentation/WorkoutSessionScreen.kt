@@ -1,13 +1,20 @@
 package com.jimtime.wear.presentation
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -16,14 +23,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
+import androidx.wear.compose.material3.CircularProgressIndicator
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.ProgressIndicatorDefaults
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
@@ -32,6 +45,7 @@ import com.jimtime.wear.data.SessionState
 import com.jimtime.wear.data.WorkoutContext
 import com.jimtime.wear.data.WorkoutCursor
 import com.jimtime.wear.data.WorkoutTarget
+import com.jimtime.wear.presentation.theme.JTColors
 import com.jimtime.wear.presentation.theme.JimTimeWearTheme
 import kotlinx.coroutines.delay
 
@@ -123,29 +137,84 @@ private fun Header(ctx: WorkoutContext, heartRate: Double) {
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
                 text = ctx.target.exerciseName,
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                maxLines = 1,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
             if (heartRate > 0) {
+                Spacer(Modifier.width(4.dp))
                 Text(
                     text = "♥ ${heartRate.toInt()}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFFEF5350),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                    color = JTColors.hr,
+                    maxLines = 1,
                 )
             }
         }
         val c = ctx.cursor
         val groupPart = if (c.totalGroups > 1) " · Es. ${c.groupIndex + 1}/${c.totalGroups}" else ""
-        Text(
-            text = "Set ${c.roundIndex + 1} di ${c.totalRoundsInGroup}$groupPart",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (c.totalRoundsInGroup <= 8) {
+                SetProgressRow(
+                    total = c.totalRoundsInGroup,
+                    currentIndex = c.roundIndex,
+                )
+            }
+            Text(
+                text = "Set ${c.roundIndex + 1} di ${c.totalRoundsInGroup}$groupPart",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
+ * One small segment per round: completed = solid brand violet, current =
+ * brand violet with an outer ring, remaining = white 15 %.
+ */
+@Composable
+private fun SetProgressRow(total: Int, currentIndex: Int) {
+    val shape = RoundedCornerShape(3.dp)
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(total) { i ->
+            val fill = when {
+                i < currentIndex  -> JTColors.brand
+                i == currentIndex -> JTColors.brand
+                else              -> Color.White.copy(alpha = 0.15f)
+            }
+            Box(
+                modifier = Modifier
+                    .width(10.dp)
+                    .height(5.dp)
+                    .clip(shape)
+                    .background(fill)
+                    .then(
+                        if (i == currentIndex)
+                            Modifier.border(1.dp, JTColors.brandBright.copy(alpha = 0.9f), shape)
+                        else Modifier
+                    ),
+            )
+        }
     }
 }
 
@@ -191,12 +260,21 @@ private fun ActiveBody(
             modifier = Modifier
                 .fillMaxWidth()
                 .size(width = 140.dp, height = 44.dp),
+            shape = CircleShape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF43A047),
+                containerColor = JTColors.success,
+                contentColor = Color.Black,
+                disabledContainerColor = JTColors.success.copy(alpha = 0.4f),
+                disabledContentColor = Color.Black.copy(alpha = 0.4f),
             ),
             enabled = !isPaused,
         ) {
-            Text("✓ Fatto", fontWeight = FontWeight.SemiBold)
+            Text(
+                "✓ Fatto",
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -214,29 +292,46 @@ private fun StepperRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Button(
-            onClick = onMinus,
-            modifier = Modifier.size(34.dp),
-            shape = CircleShape,
-            enabled = enabled,
-        ) { Text("−") }
+        StepperButton(glyph = "−", onClick = onMinus, enabled = enabled)
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 value,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                maxLines = 1,
             )
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            TinyLabel(label)
         }
-        Button(
-            onClick = onPlus,
-            modifier = Modifier.size(34.dp),
-            shape = CircleShape,
-            enabled = enabled,
-        ) { Text("+") }
+        StepperButton(glyph = "+", onClick = onPlus, enabled = enabled)
+    }
+}
+
+/** 32 pt circle, white 10 % fill, bold symbol. */
+@Composable
+private fun StepperButton(
+    glyph: String,
+    onClick: () -> Unit,
+    enabled: Boolean,
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.size(32.dp),
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.White.copy(alpha = 0.10f),
+            contentColor = Color.White,
+        ),
+        enabled = enabled,
+    ) {
+        Text(
+            glyph,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -258,37 +353,84 @@ private fun RestBody(
     val remainingMs = (endAt - now).coerceAtLeast(0L)
     val mm = (remainingMs / 1000L) / 60
     val ss = (remainingMs / 1000L) % 60
+    val totalRestSeconds = ctx.target.restSeconds
+    val nearEnd = remainingMs <= 5_000L
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(
-            text = "Recupero",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = "%d:%02d".format(mm, ss),
-            style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.Bold),
-            color = if (remainingMs == 0L) Color(0xFF66BB6A) else Color.White,
-            textAlign = TextAlign.Center,
-        )
+        TinyLabel("Recupero")
+
+        val countdownText = "%d:%02d".format(mm, ss)
+        val countdownColor = if (remainingMs == 0L) JTColors.success else Color.White
+
+        if (totalRestSeconds != null && totalRestSeconds > 0) {
+            // Countdown ring: track white 10 %, arc brand violet turning
+            // green in the last 5 s; progress = remaining / target.
+            Box(contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    progress = {
+                        (remainingMs / (totalRestSeconds * 1000f)).coerceIn(0f, 1f)
+                    },
+                    modifier = Modifier.size(84.dp),
+                    colors = ProgressIndicatorDefaults.colors(
+                        indicatorColor = if (nearEnd) JTColors.success else JTColors.brand,
+                        trackColor = Color.White.copy(alpha = 0.10f),
+                    ),
+                    strokeWidth = 7.dp,
+                )
+                Text(
+                    text = countdownText,
+                    style = MaterialTheme.typography.displayMedium.copy(
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                    color = countdownColor,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                )
+            }
+        } else {
+            // No prescribed rest duration — text-only countdown.
+            Text(
+                text = countdownText,
+                style = MaterialTheme.typography.displayMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                color = countdownColor,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+            )
+        }
+
         Text(
             text = "prossimo: ${nextSetSummary(ctx)}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Button(
             onClick = onSkipRest,
             modifier = Modifier
                 .fillMaxWidth()
-                .size(width = 140.dp, height = 40.dp),
+                .size(width = 140.dp, height = 40.dp)
+                .border(1.dp, JTColors.warning.copy(alpha = 0.8f), CircleShape),
+            shape = CircleShape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFFFB8C00),
+                containerColor = Color.Transparent,
+                contentColor = JTColors.warning,
             ),
         ) {
-            Text("⏭  Salta")
+            Text(
+                "⏭  Salta",
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -304,27 +446,30 @@ private fun Controls(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Button(
+        CircleControl(
+            glyph = "■",
+            tint = JTColors.danger,
+            solid = false,
+            size = 40.dp,
             onClick = onStop,
-            modifier = Modifier.size(40.dp),
-            shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
-        ) { Text("■") }
+        )
 
         if (isPaused) {
-            Button(
+            CircleControl(
+                glyph = "▶",
+                tint = JTColors.success,
+                solid = true,
+                size = 40.dp,
                 onClick = onResume,
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF43A047)),
-            ) { Text("▶") }
+            )
         } else {
-            Button(
+            CircleControl(
+                glyph = "⏸",
+                tint = JTColors.warning,
+                solid = false,
+                size = 40.dp,
                 onClick = onPause,
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFB8C00)),
-            ) { Text("⏸") }
+            )
         }
     }
 }

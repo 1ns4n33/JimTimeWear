@@ -9,6 +9,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
@@ -42,6 +45,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
             val heartRate    by viewModel.heartRate.collectAsStateWithLifecycle()
+            val planDays     by viewModel.planDays.collectAsStateWithLifecycle()
+            val planName     by viewModel.planName.collectAsStateWithLifecycle()
 
             val navController = rememberSwipeDismissableNavController()
 
@@ -50,9 +55,20 @@ class MainActivity : ComponentActivity() {
                 startDestination = "idle",
             ) {
                 composable("idle") {
-                    IdleScreen(onStart = { activityType ->
-                        viewModel.startFromWatch(activityType)
-                    })
+                    var phoneNeeded by remember { mutableStateOf(false) }
+                    IdleScreen(
+                        onStart = { activityType ->
+                            viewModel.startFromWatch(activityType)
+                        },
+                        planName = planName,
+                        planDays = planDays,
+                        showPhoneNeeded = phoneNeeded,
+                        onStartPlanDay = { day ->
+                            viewModel.startPlanDayFromWatch(day.week, day.day) { ok ->
+                                phoneNeeded = !ok
+                            }
+                        },
+                    )
                 }
                 composable("session") {
                     // Single route, two layouts — the phone tags the

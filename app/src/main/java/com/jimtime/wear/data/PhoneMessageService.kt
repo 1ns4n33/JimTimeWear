@@ -37,6 +37,10 @@ class PhoneMessageService : WearableListenerService() {
             MessagePaths.CMD_STOP_SESSION  -> SessionRepository.stopSession()
             MessagePaths.CMD_PAUSE_SESSION -> SessionRepository.pauseSession()
             MessagePaths.CMD_RESUME_SESSION -> SessionRepository.resumeSession()
+            MessagePaths.CMD_PLAN_DAYS -> {
+                val days = json.optJSONArray("days") ?: return
+                PlanDaysStore.apply(applicationContext, json.optString("planName"), days)
+            }
         }
     }
 
@@ -68,7 +72,17 @@ class PhoneMessageService : WearableListenerService() {
         val cursor = cursorFrom(json.optJSONObject("cursor"))
         val target = targetFrom(json.optJSONObject("target"))
         val done   = json.optInt("completedExercises", 0)
-        SessionRepository.updateWorkoutCursor(cursor, target, done)
+        // Rest rides along with the cursor (atomic with the set change);
+        // absent keys = no rest in progress.
+        val restEndAtMs = if (json.has("restSeconds")) {
+            val total = json.optInt("restSeconds")
+            val startedAtStr = json.optString("restStartedAt")
+            val startedMs = startedAtStr.toLongOrNull()
+                ?: runCatching { java.time.Instant.parse(startedAtStr).toEpochMilli() }
+                    .getOrNull()
+            startedMs?.plus(total * 1000L)
+        } else null
+        SessionRepository.updateWorkoutCursor(cursor, target, done, restEndAtMs)
     }
 
     private fun handleWorkoutStartRest(json: JSONObject) {

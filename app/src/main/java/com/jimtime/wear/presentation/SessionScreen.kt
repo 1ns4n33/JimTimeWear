@@ -11,14 +11,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
@@ -27,6 +31,7 @@ import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
 import com.jimtime.wear.data.SessionState
+import com.jimtime.wear.presentation.theme.JTColors
 import com.jimtime.wear.presentation.theme.JimTimeWearTheme
 
 @Composable
@@ -38,6 +43,8 @@ fun SessionScreen(
     onResume: () -> Unit,
     isStandalone: Boolean = false,
 ) {
+    val accent = JTColors.activity(sessionState.activityType)
+
     JimTimeWearTheme {
         AppScaffold {
             ScreenScaffold {
@@ -48,22 +55,39 @@ fun SessionScreen(
                     verticalArrangement = Arrangement.SpaceBetween,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    // ── Standalone badge ───────────────────────────────────
-                    if (isStandalone) {
-                        Text(
-                            text = "📵 Standalone",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFFB8C00),
-                            textAlign = TextAlign.Center,
+                    // ── Top row: activity chip + optional standalone badge ─
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 4.dp),
+                    ) {
+                        CapsuleChip(
+                            text = "${sessionState.activityIcon()} ${activityLabel(sessionState.activityType)}",
+                            tint = accent,
                         )
+                        if (isStandalone) {
+                            CapsuleChip(
+                                text = "📵 Standalone",
+                                tint = JTColors.warning,
+                            )
+                        }
                     }
 
-                    // ── Timer ──────────────────────────────────────────────
-                    Text(
-                        text = sessionState.formattedElapsed(),
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                        textAlign = TextAlign.Center,
-                    )
+                    // ── Elapsed ────────────────────────────────────────────
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        TinyLabel("Durata")
+                        Text(
+                            text = sessionState.formattedElapsed(),
+                            style = MaterialTheme.typography.displayMedium.copy(
+                                fontSize = 40.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                            color = Color.White,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                        )
+                    }
 
                     // ── Stats row ──────────────────────────────────────────
                     Row(
@@ -71,54 +95,60 @@ fun SessionScreen(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                     ) {
                         if (!sessionState.isIndoor()) {
-                            StatItem(label = "km", value = sessionState.formattedDistance())
-                            StatItem(label = "passo", value = sessionState.formattedPace())
+                            StatCell(
+                                icon = "📍",
+                                tint = accent,
+                                label = "km",
+                                value = sessionState.formattedDistance().removeSuffix(" km"),
+                            )
+                            StatCell(
+                                icon = "⚡",
+                                tint = Color.White.copy(alpha = 0.7f),
+                                label = "passo",
+                                value = sessionState.formattedPace(),
+                            )
                         }
                         if (heartRate > 0) {
-                            StatItem(label = "bpm", value = heartRate.toInt().toString())
+                            StatCell(
+                                icon = "♥",
+                                tint = JTColors.hr,
+                                label = "bpm",
+                                value = heartRate.toInt().toString(),
+                            )
                         }
                     }
 
                     // ── Buttons ────────────────────────────────────────────
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Stop — red
-                        Button(
+                        // Stop — red tinted circle
+                        CircleControl(
+                            glyph = "■",
+                            tint = JTColors.danger,
+                            solid = false,
+                            size = 48.dp,
                             onClick = onStop,
-                            modifier = Modifier.size(48.dp),
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFE53935),
-                            ),
-                        ) {
-                            Text("■", textAlign = TextAlign.Center)
-                        }
+                        )
 
-                        // Pause / Resume — amber
+                        // Pause / Resume
                         if (sessionState.isPaused) {
-                            Button(
+                            CircleControl(
+                                glyph = "▶",
+                                tint = JTColors.success,
+                                solid = true,
+                                size = 48.dp,
                                 onClick = onResume,
-                                modifier = Modifier.size(48.dp),
-                                shape = CircleShape,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF43A047),
-                                ),
-                            ) {
-                                Text("▶", textAlign = TextAlign.Center)
-                            }
+                            )
                         } else {
-                            Button(
+                            CircleControl(
+                                glyph = "⏸",
+                                tint = JTColors.warning,
+                                solid = false,
+                                size = 48.dp,
                                 onClick = onPause,
-                                modifier = Modifier.size(48.dp),
-                                shape = CircleShape,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFFFB8C00),
-                                ),
-                            ) {
-                                Text("⏸", textAlign = TextAlign.Center)
-                            }
+                            )
                         }
                     }
                 }
@@ -127,17 +157,113 @@ fun SessionScreen(
     }
 }
 
+private fun activityLabel(id: String): String = when (id) {
+    "run"            -> "Corsa"
+    "walk"           -> "Camminata"
+    "bike"           -> "Bici"
+    "hike"           -> "Escursione"
+    "trail"          -> "Trail"
+    "skate"          -> "Skate"
+    "mtb"            -> "MTB"
+    "treadmill_run"  -> "Tapis roulant corsa"
+    "treadmill_walk" -> "Tapis roulant cammino"
+    "indoor_cycling" -> "Bici indoor"
+    "meditation"     -> "Meditazione"
+    "pilates"        -> "Pilates"
+    "yoga"           -> "Yoga"
+    "stretching"     -> "Stretching"
+    else             -> "Attività"
+}
+
+/** Small tinted capsule chip (activity / standalone badge). */
 @Composable
-private fun StatItem(label: String, value: String) {
+internal fun CapsuleChip(text: String, tint: Color) {
+    Box(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(tint.copy(alpha = 0.16f))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+            ),
+            color = tint,
+            maxLines = 1,
+        )
+    }
+}
+
+/** 9pt uppercase secondary section micro-label. */
+@Composable
+internal fun TinyLabel(text: String) {
+    Text(
+        text = text.uppercase(),
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.8.sp,
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+    )
+}
+
+/** Icon-in-colored-circle + value + tiny unit label. */
+@Composable
+private fun StatCell(icon: String, tint: Color, label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(tint.copy(alpha = 0.18f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(icon, fontSize = 11.sp, color = tint)
+        }
+        Spacer(Modifier.height(2.dp))
         Text(
             text = value,
-            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+            style = MaterialTheme.typography.bodyLarge.copy(
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace,
+            ),
+            maxLines = 1,
         )
+        TinyLabel(label)
+    }
+}
+
+/**
+ * Circular session control: tinted 22 %-alpha circle with the glyph in
+ * the accent color, or a solid circle with a black glyph (resume).
+ */
+@Composable
+internal fun CircleControl(
+    glyph: String,
+    tint: Color,
+    solid: Boolean,
+    size: androidx.compose.ui.unit.Dp,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.size(size),
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (solid) tint else tint.copy(alpha = 0.22f),
+            contentColor = if (solid) Color.Black else tint,
+        ),
+    ) {
         Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            glyph,
+            textAlign = TextAlign.Center,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

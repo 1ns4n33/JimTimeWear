@@ -40,17 +40,23 @@ class PhoneConnector(private val context: Context) {
         }
     }
 
+    /// Delivers a standalone session summary to the phone: `routeSync`
+    /// when GPS points exist, `sessionSync` (routeless, e.g. indoor on
+    /// the wrist) when they don't. Returns true only on confirmed send
+    /// so callers can keep the payload pending otherwise.
     suspend fun sendRouteToPhone(
         points: List<GpsPoint>,
         activityType: String,
         startedAt: Long,
         endedAt: Long,
-    ) {
-        try {
+        avgHr: Double? = null,
+        maxHr: Double? = null,
+    ): Boolean {
+        return try {
             val nodes = nodeClient.connectedNodes.await()
             if (nodes.isEmpty()) {
                 Log.w("PhoneConnector", "No nodes — route not sent")
-                return
+                return false
             }
             val arr = JSONArray()
             points.forEach { p ->
@@ -63,19 +69,27 @@ class PhoneConnector(private val context: Context) {
                 })
             }
             val payload = JSONObject().apply {
-                put("cmd",       "routeSync")
+                put(
+                    "cmd",
+                    if (points.isEmpty()) MessagePaths.CMD_SESSION_SYNC
+                    else MessagePaths.CMD_ROUTE_SYNC,
+                )
                 put("type",      activityType)
                 put("startedAt", startedAt)
                 put("endedAt",   endedAt)
                 put("points",    arr)
+                if (avgHr != null) put("avgHr", avgHr)
+                if (maxHr != null) put("maxHr", maxHr)
             }.toString().toByteArray()
 
             nodes.forEach { node ->
                 messageClient.sendMessage(node.id, MessagePaths.PATH_WATCH, payload).await()
             }
-            Log.d("PhoneConnector", "Route sent: ${points.size} points")
+            Log.d("PhoneConnector", "Session sent: ${points.size} points")
+            true
         } catch (e: Exception) {
             Log.e("PhoneConnector", "sendRouteToPhone error: $e")
+            false
         }
     }
 }
