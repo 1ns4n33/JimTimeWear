@@ -45,4 +45,6 @@ object MessagePaths {
     // routeSync, without (indoor on the wrist) = sessionSync.
     const val CMD_ROUTE_SYNC   = "routeSync"
     const val CMD_SESSION_SYNC = "sessionSync"
+    /// Sessione palestra/intervalli standalone dal polso → telefono.
+    const val CMD_GYM_SESSION_SYNC = "gymSessionSync"
 }

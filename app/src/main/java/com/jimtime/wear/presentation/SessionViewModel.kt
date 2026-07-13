@@ -4,7 +4,15 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jimtime.wear.data.GpsPoint
+import com.jimtime.wear.data.IntervalSpec
 import com.jimtime.wear.data.MessagePaths
+import com.jimtime.wear.data.PendingGymStore
+import com.jimtime.wear.data.WorkoutContext
+import com.jimtime.wear.data.WorkoutCursor
+import com.jimtime.wear.data.WorkoutTarget
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
 import com.jimtime.wear.data.PendingRouteStore
 import com.jimtime.wear.data.PhoneConnector
 import com.jimtime.wear.data.PlanDay
@@ -44,12 +52,34 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         PlanDaysStore.load(application)
+        // Sync intervalli rimasto in outbox da una sessione chiusa offline.
+        viewModelScope.launch {
+            PendingGymStore.load(application)?.let { pending ->
+                if (phoneConnector.isPhoneReachable()) {
+                    phoneConnector.sendToPhone(
+                        MessagePaths.CMD_GYM_SESSION_SYNC, jsonToMap(pending)
+                    )
+                    PendingGymStore.clear(application)
+                }
+            }
+        }
         // Wear messages aren't cached phone-side: ask for a fresh plan
         // list in case a push happened while we were disconnected.
         viewModelScope.launch {
             phoneConnector.sendToPhone(MessagePaths.CMD_REQUEST_PLAN_DAYS)
         }
         startPendingRouteRetry()
+        // Sync intervalli rimasto in outbox da una sessione chiusa offline.
+        viewModelScope.launch {
+            PendingGymStore.load(application)?.let { pending ->
+                if (phoneConnector.isPhoneReachable()) {
+                    phoneConnector.sendToPhone(
+                        MessagePaths.CMD_GYM_SESSION_SYNC, jsonToMap(pending)
+                    )
+                    PendingGymStore.clear(application)
+                }
+            }
+        }
         viewModelScope.launch {
             sessionState.collect { state ->
                 when {
@@ -174,6 +204,13 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     /// phone-side action falls back to. The current cursor is echoed
     /// so the phone can DROP a tap that raced a group jump.
     fun completeSetFromWatch(reps: Int?, weight: Double?) {
+        // Sessione intervalli standalone: il "Fatto" è locale (AMRAP/ForTime
+        // contano il giro; le auto-timed lo trattano come fine anticipata
+        // dell'intervallo di lavoro).
+        if (intervalSpec != null) {
+            advanceIntervalStandalone()
+            return
+        }
         viewModelScope.launch {
             val cursor = SessionRepository.state.value.workout?.cursor
             phoneConnector.sendToPhone(
@@ -192,6 +229,12 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun skipRestFromWatch() {
+        if (intervalSpec != null) {
+            SessionRepository.clearWorkoutRest()
+            intervalWorkEndAt =
+                System.currentTimeMillis() + (intervalSpec?.workSeconds ?: 0) * 1000L
+            return
+        }
         viewModelScope.launch {
             phoneConnector.sendToPhone(
                 MessagePaths.CMD_SKIP_REST,
@@ -320,4 +363,187 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         gpsTracker.stop()
         retryJob?.cancel()
     }
+    // ── Intervalli standalone (quick-start dal polso, nessun telefono) ──────
+
+    private var intervalSpec: IntervalSpec? = null
+    private var intervalRound = 0
+    private var intervalWorkEndAt = 0L
+    private var intervalTotalEndAt = 0L
+    private var intervalStartedAt = 0L
+    private var intervalTickerJob: Job? = null
+
+    fun startIntervalStandalone(spec: IntervalSpec) {
+        if (SessionRepository.state.value.isActive) return
+        intervalSpec = spec
+        intervalRound = 0
+        intervalStartedAt = System.currentTimeMillis()
+        intervalWorkEndAt = if (spec.isAutoTimed)
+            intervalStartedAt + spec.workSeconds * 1000L else 0L
+        intervalTotalEndAt = spec.totalSeconds
+            ?.let { intervalStartedAt + it * 1000L } ?: 0L
+        SessionRepository.startWorkoutSession(
+            startedAt = intervalStartedAt,
+            context = intervalContext(),
+        )
+        intervalTickerJob?.cancel()
+        intervalTickerJob = viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                intervalTick()
+            }
+        }
+    }
+
+    private fun intervalContext(restEndAtMs: Long? = null): WorkoutContext {
+        val spec = intervalSpec ?: return WorkoutContext()
+        val totalRounds = if (spec.mode == "amrap") intervalRound + 1 else spec.rounds
+        return WorkoutContext(
+            planName = spec.modeLabel,
+            weekLabel = "",
+            dayLabel = "${spec.modeLabel} · ${spec.compactLabel}",
+            cursor = WorkoutCursor(
+                groupIndex = 0,
+                roundIndex = intervalRound.coerceAtMost(totalRounds - 1),
+                exerciseIndex = 0,
+                totalGroups = 1,
+                totalRoundsInGroup = totalRounds,
+            ),
+            target = WorkoutTarget(
+                exerciseName = spec.modeLabel,
+                durationSeconds = if (spec.isAutoTimed) spec.workSeconds else null,
+                restSeconds = if (spec.restSeconds > 0) spec.restSeconds else null,
+            ),
+            restEndAtMs = restEndAtMs,
+            completedExercises = intervalRound,
+        )
+    }
+
+    private fun intervalTick() {
+        val spec = intervalSpec ?: run { intervalTickerJob?.cancel(); return }
+        val st = SessionRepository.state.value
+        if (!st.isActive) {
+            // Stop da qualsiasi percorso (Controls, ecc.) → sincronizza e chiudi.
+            finishIntervalStandalone(alreadyStopped = true)
+            return
+        }
+        if (st.isPaused) {
+            // Congela le scadenze shiftandole del tick in pausa.
+            if (intervalWorkEndAt > 0) intervalWorkEndAt += 1000
+            if (intervalTotalEndAt > 0) intervalTotalEndAt += 1000
+            st.workout?.restEndAtMs?.let {
+                SessionRepository.startWorkoutRest(
+                    ((it + 1000 - System.currentTimeMillis()) / 1000L).toInt()
+                        .coerceAtLeast(1),
+                    System.currentTimeMillis(),
+                )
+            }
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (intervalTotalEndAt > 0 && now >= intervalTotalEndAt) {
+            finishIntervalStandalone(alreadyStopped = false)
+            return
+        }
+        if (!spec.isAutoTimed) return
+        val restEnd = st.workout?.restEndAtMs
+        if (restEnd != null) {
+            if (now >= restEnd) {
+                SessionRepository.clearWorkoutRest()
+                intervalWorkEndAt = now + spec.workSeconds * 1000L
+            }
+            return
+        }
+        if (now >= intervalWorkEndAt) advanceIntervalStandalone()
+    }
+
+    /// Chiude un intervallo di lavoro: logga il round, poi riposo o fine.
+    private fun advanceIntervalStandalone() {
+        val spec = intervalSpec ?: return
+        intervalRound++
+        val done = spec.mode != "amrap" && intervalRound >= spec.rounds
+        if (done) {
+            finishIntervalStandalone(alreadyStopped = false)
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (spec.isAutoTimed && spec.restSeconds > 0) {
+            SessionRepository.updateWorkoutCursor(
+                intervalContext(restEndAtMs = now + spec.restSeconds * 1000L).cursor,
+                intervalContext().target,
+                intervalRound,
+                now + spec.restSeconds * 1000L,
+            )
+        } else {
+            intervalWorkEndAt = now + spec.workSeconds * 1000L
+            SessionRepository.updateWorkoutCursor(
+                intervalContext().cursor,
+                intervalContext().target,
+                intervalRound,
+                null,
+            )
+        }
+    }
+
+    private fun finishIntervalStandalone(alreadyStopped: Boolean) {
+        val spec = intervalSpec ?: return
+        intervalSpec = null
+        intervalTickerJob?.cancel()
+        intervalTickerJob = null
+        val rounds = intervalRound
+        val endedAt = System.currentTimeMillis()
+        if (!alreadyStopped) SessionRepository.stopSession()
+        if (rounds <= 0) return // niente sessione fantasma
+
+        val payload = mutableMapOf<String, Any?>(
+            "syncId" to UUID.randomUUID().toString(),
+            "planId" to "interval-workout",
+            "planName" to spec.modeLabel,
+            "weekLabel" to "",
+            "dayLabel" to "${spec.modeLabel} · ${spec.compactLabel}",
+            "week" to 0,
+            "day" to 0,
+            "startedAt" to intervalStartedAt,
+            "endedAt" to endedAt,
+            "groups" to listOf(
+                mapOf(
+                    "type" to "single",
+                    "planGroupIndex" to 0,
+                    "exercises" to listOf(
+                        mapOf(
+                            "exerciseName" to spec.modeLabel,
+                            "sets" to (1..rounds).map { mapOf("setNumber" to it) },
+                        )
+                    ),
+                )
+            ),
+        )
+        workoutManager.hrAverage?.let { payload["avgHr"] = it }
+        workoutManager.hrMaxOrNull?.let { payload["maxHr"] = it }
+
+        viewModelScope.launch {
+            if (phoneConnector.isPhoneReachable()) {
+                phoneConnector.sendToPhone(MessagePaths.CMD_GYM_SESSION_SYNC, payload)
+            } else {
+                PendingGymStore.save(getApplication(), JSONObject(payload))
+            }
+        }
+    }
+
+    /// JSONObject → Map annidata (org.json non ha toMap; serve per il retry
+    /// dell'outbox gymSessionSync).
+    private fun jsonToMap(obj: JSONObject): Map<String, Any?> =
+        obj.keys().asSequence().associateWith { k ->
+            when (val v = obj.get(k)) {
+                is JSONObject -> jsonToMap(v)
+                is JSONArray -> (0 until v.length()).map { i ->
+                    when (val e = v.get(i)) {
+                        is JSONObject -> jsonToMap(e)
+                        else -> e
+                    }
+                }
+                JSONObject.NULL -> null
+                else -> v
+            }
+        }
+
 }

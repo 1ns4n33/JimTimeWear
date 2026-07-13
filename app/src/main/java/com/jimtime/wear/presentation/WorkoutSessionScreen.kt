@@ -236,6 +236,31 @@ private fun ActiveBody(
         val effectiveReps = repsOverride ?: ctx.target.reps
         val effectiveWeight = weightOverride ?: ctx.target.weight
 
+        // Intervalli a tempo (Tabata/EMOM/HIIT/stazioni): countdown lavoro
+        // al posto del target di carico. Ancorato all'arrivo del cursor —
+        // il telefono avanza allo 0 e il push successivo fa ripartire.
+        val workSeconds = ctx.target.durationSeconds
+        if (workSeconds != null && workSeconds > 0 && !isPaused) {
+            var remaining by remember(ctx.cursor) {
+                mutableStateOf(workSeconds)
+            }
+            LaunchedEffect(ctx.cursor) {
+                val endAt = System.currentTimeMillis() + workSeconds * 1000L
+                while (true) {
+                    val left =
+                        ((endAt - System.currentTimeMillis()) / 1000L).toInt()
+                    remaining = left.coerceAtLeast(0)
+                    if (left <= 0) break
+                    kotlinx.coroutines.delay(250)
+                }
+            }
+            Text(
+                text = "%d:%02d".format(remaining / 60, remaining % 60),
+                style = MaterialTheme.typography.numeralMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+
         if (effectiveReps != null) {
             StepperRow(
                 value = effectiveReps.toString(),

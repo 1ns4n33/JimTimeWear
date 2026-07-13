@@ -37,6 +37,7 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
+import com.jimtime.wear.data.IntervalSpec
 import com.jimtime.wear.data.PlanDay
 import com.jimtime.wear.presentation.theme.JTColors
 import com.jimtime.wear.presentation.theme.JimTimeWearTheme
@@ -65,6 +66,7 @@ fun IdleScreen(
     planDays: List<PlanDay> = emptyList(),
     showPhoneNeeded: Boolean = false,
     onStartPlanDay: (PlanDay) -> Unit = {},
+    onStartInterval: (IntervalSpec) -> Unit = {},
 ) {
     var selected by remember { mutableStateOf("run") }
 
@@ -108,6 +110,26 @@ fun IdleScreen(
                                 text = "Attività",
                                 modifier = Modifier.padding(top = 6.dp),
                             )
+                        }
+                    }
+                    // ── Intervalli: quick start standalone dal polso ──
+                    item {
+                        SectionLabel(
+                            text = "⏱ Intervalli",
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
+                    IntervalSpec.presets.forEach { spec ->
+                        item {
+                            androidx.wear.compose.material3.Button(
+                                onClick = { onStartInterval(spec) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    text = "${spec.modeLabel} · ${spec.compactLabel}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                            }
                         }
                     }
 

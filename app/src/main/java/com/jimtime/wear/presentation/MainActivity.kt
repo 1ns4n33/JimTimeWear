@@ -63,6 +63,9 @@ class MainActivity : ComponentActivity() {
                         planName = planName,
                         planDays = planDays,
                         showPhoneNeeded = phoneNeeded,
+                        onStartInterval = { spec ->
+                            viewModel.startIntervalStandalone(spec)
+                        },
                         onStartPlanDay = { day ->
                             viewModel.startPlanDayFromWatch(day.week, day.day) { ok ->
                                 phoneNeeded = !ok
