@@ -1,7 +1,9 @@
 package com.jimtime.wear.presentation
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,11 +14,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
+import com.jimtime.wear.data.SessionRepository
+import com.jimtime.wear.health.TrackingEngine
+import com.jimtime.wear.health.TrackingService
 
 class MainActivity : ComponentActivity() {
 
@@ -30,16 +36,35 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
 
-        val neededPermissions = arrayOf(
+        val neededPermissions = mutableListOf(
             Manifest.permission.BODY_SENSORS,
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
-        ).filter {
+        ).apply {
+            // API 33+: senza, il FGS di TrackingService parte comunque ma
+            // la sua notifica/chip resta invisibile all'utente.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }.filter {
             checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
 
         if (neededPermissions.isNotEmpty()) {
             permissionLauncher.launch(neededPermissions)
+        }
+
+        // Un crash mentre TrackingService non era stato (ancora) ri-agganciato
+        // da START_STICKY deve comunque essere recuperato alla prossima
+        // apertura dell'app — stessa logica idempotente usata dal restart
+        // sticky del service.
+        TrackingEngine.init(applicationContext)
+        TrackingEngine.recoverIfNeeded(applicationContext)
+        val recovered = SessionRepository.state.value
+        if (recovered.isActive && recovered.isStandalone) {
+            ContextCompat.startForegroundService(
+                this, Intent(this, TrackingService::class.java),
+            )
         }
 
         setContent {

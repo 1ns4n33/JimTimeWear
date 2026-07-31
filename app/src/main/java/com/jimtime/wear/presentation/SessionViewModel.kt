@@ -1,12 +1,16 @@
 package com.jimtime.wear.presentation
 
 import android.app.Application
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.jimtime.wear.data.ActiveSessionStore
 import com.jimtime.wear.data.GpsPoint
 import com.jimtime.wear.data.IntervalSpec
 import com.jimtime.wear.data.MessagePaths
 import com.jimtime.wear.data.PendingGymStore
+import com.jimtime.wear.data.SessionKind
 import com.jimtime.wear.data.WorkoutContext
 import com.jimtime.wear.data.WorkoutCursor
 import com.jimtime.wear.data.WorkoutTarget
@@ -19,8 +23,8 @@ import com.jimtime.wear.data.PlanDay
 import com.jimtime.wear.data.PlanDaysStore
 import com.jimtime.wear.data.SessionRepository
 import com.jimtime.wear.data.SessionState
-import com.jimtime.wear.health.GpsTracker
-import com.jimtime.wear.health.WearWorkoutManager
+import com.jimtime.wear.health.TrackingEngine
+import com.jimtime.wear.health.TrackingService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
@@ -30,14 +34,19 @@ import kotlinx.coroutines.launch
 
 class SessionViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val workoutManager = WearWorkoutManager(application)
+    init {
+        // Deve girare PRIMA di qualunque property qui sotto che legge
+        // TrackingEngine.gpsTracker/workoutManager (lateinit) — idempotente,
+        // quindi innocuo anche se MainActivity l'ha già chiamato.
+        TrackingEngine.init(application)
+    }
+
     private val phoneConnector = PhoneConnector(application)
-    private val gpsTracker     = GpsTracker(application)
 
     val sessionState: StateFlow<SessionState> = SessionRepository.state
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SessionState())
 
-    val heartRate: StateFlow<Double> = workoutManager.heartRate
+    val heartRate: StateFlow<Double> = TrackingEngine.workoutManager.heartRate
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0.0)
 
     val planDays: StateFlow<List<PlanDay>> = PlanDaysStore.days
@@ -82,21 +91,29 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
         viewModelScope.launch {
             sessionState.collect { state ->
+                if (state.isStandalone && state.kind == SessionKind.ACTIVITY) {
+                    // TrackingService possiede sensori/timer per l'attività
+                    // standalone (sopravvive a schermo spento/process
+                    // death) — se la VM li gestisse anche lei si
+                    // duplicherebbe il tick o si correrebbe col reset dei
+                    // punti GPS già raccolti dal service.
+                    return@collect
+                }
                 when {
                     state.isActive && !state.isPaused -> {
-                        workoutManager.startMonitoring()
+                        TrackingEngine.workoutManager.startMonitoring()
                         startTimer()
                         startHrSender()
                     }
                     state.isPaused -> {
                         stopTimer()
-                        gpsTracker.stop()
+                        TrackingEngine.gpsTracker.stop()
                     }
                     !state.isActive -> {
                         stopTimer()
                         stopHrSender()
-                        workoutManager.stopMonitoring()
-                        gpsTracker.stop()
+                        TrackingEngine.workoutManager.stopMonitoring()
+                        TrackingEngine.gpsTracker.stop()
                     }
                 }
             }
@@ -104,7 +121,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
         // Keep distance in sync with GPS tracker
         viewModelScope.launch {
-            gpsTracker.points.collect { points ->
+            TrackingEngine.gpsTracker.points.collect { points ->
                 val meters = computeDistance(points)
                 SessionRepository.updateDistance(meters)
             }
@@ -115,8 +132,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     fun startFromWatch(activityType: String) {
         viewModelScope.launch {
-            workoutManager.resetHrAccumulation()
-            val isOutdoor = activityType in listOf("run", "walk", "bike")
+            TrackingEngine.workoutManager.resetHrAccumulation()
             val reachable = phoneConnector.isPhoneReachable()
             if (reachable) {
                 // Phone leads GPS — just notify it.
@@ -126,9 +142,15 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                     buildStartCmd(activityType, now)
                 )
             } else {
-                // Standalone: Watch owns GPS.
+                // Standalone: nessun telefono raggiungibile. TrackingService
+                // possiede sensori/GPS/timer per l'intera sessione (anche a
+                // schermo spento) — decide lui se activityType richiede GPS
+                // (GPS_ACTIVITY_TYPES), osservando SessionRepository.state.
                 SessionRepository.startStandaloneSession(activityType)
-                if (isOutdoor) gpsTracker.start()
+                ContextCompat.startForegroundService(
+                    getApplication(),
+                    Intent(getApplication(), TrackingService::class.java),
+                )
             }
         }
     }
@@ -136,34 +158,43 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     fun stopFromWatch() {
         viewModelScope.launch {
             val state = SessionRepository.state.value
-            if (state.isStandalone) {
-                gpsTracker.stop()
-                val points   = gpsTracker.points.value
-                val endedAt  = System.currentTimeMillis()
-                // Capture BEFORE stopSession(): the state collector will
-                // stop the HR sensor when the session goes inactive.
-                val avgHr = workoutManager.hrAverage
-                val maxHr = workoutManager.hrMaxOrNull
-                SessionRepository.stopSession()
-                // Try to sync immediately; if phone unreachable, persist
-                // and let the retry loop deliver it at reconnection.
-                val sent = trySendRoute(
-                    points, state.activityType, state.startedAt, endedAt, avgHr, maxHr,
+            if (state.isStandalone && state.kind == SessionKind.ACTIVITY) {
+                val points  = TrackingEngine.gpsTracker.points.value
+                val endedAt = System.currentTimeMillis()
+                // Capture BEFORE stopSession(): a stato inattivo
+                // TrackingService azzera i sensori appena osserva la
+                // transizione.
+                val avgHr = TrackingEngine.workoutManager.hrAverage
+                val maxHr = TrackingEngine.workoutManager.hrMaxOrNull
+                val syncId = UUID.randomUUID().toString()
+
+                // Persistito PRIMA di qualunque tentativo di rete e PRIMA
+                // di flippare lo stato: se il processo muore qui, il dato
+                // non sparisce (oggi veniva salvato solo se l'invio
+                // falliva — troppo tardi per coprire un crash).
+                PendingRouteStore.save(
+                    getApplication(),
+                    PendingRouteStore.PendingRoute(
+                        points       = points,
+                        activityType = state.activityType,
+                        startedAt    = state.startedAt,
+                        endedAt      = endedAt,
+                        avgHr        = avgHr,
+                        maxHr        = maxHr,
+                        syncId       = syncId,
+                    ),
                 )
-                if (!sent) {
-                    PendingRouteStore.save(
-                        getApplication(),
-                        PendingRouteStore.PendingRoute(
-                            points       = points,
-                            activityType = state.activityType,
-                            startedAt    = state.startedAt,
-                            endedAt      = endedAt,
-                            avgHr        = avgHr,
-                            maxHr        = maxHr,
-                        ),
-                    )
-                    startPendingRouteRetry()
-                }
+                SessionRepository.stopSession()
+                ActiveSessionStore.clear(getApplication())
+                getApplication<Application>().stopService(
+                    Intent(getApplication(), TrackingService::class.java)
+                )
+
+                // Tentativo immediato; la clear della store avviene SOLO al
+                // syncAck del telefono (PhoneMessageService) — mai su un
+                // semplice invio riuscito a livello di trasporto.
+                trySendRoute(points, state.activityType, state.startedAt, endedAt, avgHr, maxHr, syncId)
+                startPendingRouteRetry()
             } else {
                 phoneConnector.sendToPhone(MessagePaths.CMD_STOP_FROM_WATCH)
                 SessionRepository.stopSession()
@@ -174,8 +205,10 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     fun pauseFromWatch() {
         viewModelScope.launch {
             val state = SessionRepository.state.value
-            if (state.isStandalone) {
-                gpsTracker.stop()
+            if (state.isStandalone && state.kind == SessionKind.ACTIVITY) {
+                // TrackingService osserva la transizione e ferma il GPS
+                // (la FC resta attiva, semantica invariata) — vedi
+                // TrackingService.observeSession.
                 SessionRepository.pauseSession()
             } else {
                 phoneConnector.sendToPhone(MessagePaths.CMD_PAUSE_FROM_WATCH)
@@ -187,8 +220,10 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     fun resumeFromWatch() {
         viewModelScope.launch {
             val state = SessionRepository.state.value
-            if (state.isStandalone && state.activityType in listOf("run", "walk", "bike")) {
-                gpsTracker.start()
+            if (state.isStandalone && state.kind == SessionKind.ACTIVITY) {
+                // TrackingService riattiva i sensori (GPS via resume(),
+                // mai start(): i punti raccolti prima della pausa non
+                // vanno persi — era il bug storico di questa funzione).
                 SessionRepository.resumeSession()
             } else {
                 phoneConnector.sendToPhone(MessagePaths.CMD_RESUME_FROM_WATCH)
@@ -270,18 +305,33 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         retryJob = viewModelScope.launch {
             while (true) {
                 delay(30_000)
-                val pending = PendingRouteStore.load(getApplication()) ?: break
-                val sent = trySendRoute(
-                    pending.points,
-                    pending.activityType,
-                    pending.startedAt,
-                    pending.endedAt,
-                    pending.avgHr,
-                    pending.maxHr,
-                )
-                if (sent) {
-                    PendingRouteStore.clear(getApplication())
-                    break
+                val pendingRoutes = PendingRouteStore.loadAll(getApplication())
+                if (pendingRoutes.isEmpty()) break
+                pendingRoutes.forEach { pending ->
+                    val sent = trySendRoute(
+                        pending.points,
+                        pending.activityType,
+                        pending.startedAt,
+                        pending.endedAt,
+                        pending.avgHr,
+                        pending.maxHr,
+                        pending.syncId,
+                    )
+                    if (sent && pending.syncId == null) {
+                        // Entry legacy (scritta da una build precedente
+                        // all'introduzione di syncId): il phone non manderà
+                        // mai un ack per lei (WatchService.sendSyncAck fa
+                        // short-circuit su syncId nullo/vuoto), quindi
+                        // torniamo al vecchio comportamento "clear on
+                        // successful send" — altrimenti ritenterebbe
+                        // all'infinito.
+                        PendingRouteStore.remove(getApplication(), syncId = null, startedAt = pending.startedAt)
+                    }
+                    // Entry non-legacy: nessuna clear qui anche se l'invio
+                    // riesce — la cancella solo il syncAck del telefono
+                    // (PhoneMessageService.handleSyncAck). Un re-invio è
+                    // innocuo — il telefono deduplica per tipo e finestra
+                    // ±60s.
                 }
             }
             retryJob = null
@@ -295,10 +345,11 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         endedAt: Long,
         avgHr: Double? = null,
         maxHr: Double? = null,
+        syncId: String? = null,
     ): Boolean {
         if (!phoneConnector.isPhoneReachable()) return false
         return phoneConnector.sendRouteToPhone(
-            points, activityType, startedAt, endedAt, avgHr, maxHr,
+            points, activityType, startedAt, endedAt, avgHr, maxHr, syncId,
         )
     }
 
@@ -325,7 +376,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         hrSendJob = viewModelScope.launch {
             while (true) {
                 delay(3_000)
-                val bpm = workoutManager.heartRate.value
+                val bpm = TrackingEngine.workoutManager.heartRate.value
                 if (bpm > 0 && !SessionRepository.state.value.isStandalone) {
                     phoneConnector.sendToPhone(
                         """{"cmd":"hrUpdate","bpm":$bpm}"""
@@ -359,8 +410,16 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         super.onCleared()
-        workoutManager.stopMonitoring()
-        gpsTracker.stop()
+        val state = SessionRepository.state.value
+        if (!(state.isStandalone && state.kind == SessionKind.ACTIVITY)) {
+            // Le sessioni ACTIVITY standalone restano vive nel
+            // TrackingService anche se questa ViewModel viene distrutta
+            // (screen off, rotazione, ricreazione Activity) — non
+            // toccarle, altrimenti si spegnerebbero i sensori sotto ai
+            // piedi del service.
+            TrackingEngine.workoutManager.stopMonitoring()
+            TrackingEngine.gpsTracker.stop()
+        }
         retryJob?.cancel()
     }
     // ── Intervalli standalone (quick-start dal polso, nessun telefono) ──────
@@ -517,8 +576,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 )
             ),
         )
-        workoutManager.hrAverage?.let { payload["avgHr"] = it }
-        workoutManager.hrMaxOrNull?.let { payload["maxHr"] = it }
+        TrackingEngine.workoutManager.hrAverage?.let { payload["avgHr"] = it }
+        TrackingEngine.workoutManager.hrMaxOrNull?.let { payload["maxHr"] = it }
 
         viewModelScope.launch {
             if (phoneConnector.isPhoneReachable()) {
@@ -546,4 +605,11 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
+    companion object {
+        /// Tipi attività tracciati via GPS quando la sessione è standalone
+        /// (stessi id offerti da IdleScreen per le attività "outdoor").
+        /// Unica fonte di verità: prima duplicata (e disallineata — hike/
+        /// trail mancavano) tra startFromWatch e resumeFromWatch.
+        val GPS_ACTIVITY_TYPES = setOf("run", "walk", "bike", "hike", "trail")
+    }
 }

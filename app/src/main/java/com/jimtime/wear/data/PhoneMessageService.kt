@@ -41,7 +41,20 @@ class PhoneMessageService : WearableListenerService() {
                 val days = json.optJSONArray("days") ?: return
                 PlanDaysStore.apply(applicationContext, json.optString("planName"), days)
             }
+            MessagePaths.CMD_SYNC_ACK -> handleSyncAck(json)
         }
+    }
+
+    /// Il phone conferma di aver persistito una routeSync/sessionSync.
+    /// Manifest-registered, quindi arriva anche se il processo watch è
+    /// stato riavviato dopo lo stopFromWatch che ha scritto la entry.
+    /// Clear SOLO qui — mai su un semplice invio riuscito a livello di
+    /// trasporto (vedi SessionViewModel.stopFromWatch / retry loop).
+    private fun handleSyncAck(json: JSONObject) {
+        val ackSyncId = json.optString("syncId").takeIf { it.isNotEmpty() } ?: return
+        // Rimuove solo la entry che corrisponde a questo ack — la coda può
+        // contenere altre route ancora in attesa (vedi PendingRouteStore).
+        PendingRouteStore.remove(applicationContext, ackSyncId)
     }
 
     // MARK: - Workout helpers

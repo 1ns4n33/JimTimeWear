@@ -34,9 +34,31 @@ class GpsTracker(context: Context) {
         }
     }
 
+    /// Nuova sessione: azzera la rotta e registra gli aggiornamenti da zero.
     @SuppressLint("MissingPermission")
     fun start() {
         _points.value = emptyList()
+        registerUpdates()
+    }
+
+    /// Ripresa di una sessione già in corso (pausa→resume, o dopo un
+    /// restore() da crash-recovery): NON tocca _points. Solo start()
+    /// resetta — altrimenti pausa+resume cancellerebbe la rotta già
+    /// raccolta (bug storico: resumeFromWatch chiamava start()).
+    @SuppressLint("MissingPermission")
+    fun resume() {
+        registerUpdates()
+    }
+
+    /// Crash recovery: ripristina i punti da un checkpoint persistito
+    /// SENZA (ri)registrare gli aggiornamenti — il chiamante decide se e
+    /// quando riprendere la raccolta con resume().
+    fun restore(points: List<GpsPoint>) {
+        _points.value = points
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun registerUpdates() {
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5_000L)
             .setMinUpdateDistanceMeters(5f)
             .build()

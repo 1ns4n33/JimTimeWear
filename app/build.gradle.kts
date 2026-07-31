@@ -50,6 +50,8 @@ android {
 dependencies {
     implementation(libs.play.services.wearable)
     implementation(libs.play.services.location)
+    implementation(libs.wear.ongoing)
+    implementation(libs.androidx.core)
     implementation(platform(libs.compose.bom))
     implementation(libs.ui)
     implementation(libs.ui.graphics)

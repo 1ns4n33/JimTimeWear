@@ -4,8 +4,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.BODY_SENSORS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature android:name="android.hardware.type.watch" />
 
@@ -49,6 +51,13 @@
                     android:pathPrefix="/jimtime" />
             </intent-filter>
         </service>
+
+        <!-- Foreground service: sensori/GPS di una sessione ACTIVITY
+             standalone, sopravvive a schermo spento/Doze per ore. -->
+        <service
+            android:name=".health.TrackingService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
 
     </application>
 

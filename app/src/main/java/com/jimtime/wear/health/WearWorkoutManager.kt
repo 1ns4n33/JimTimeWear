@@ -28,6 +28,22 @@ class WearWorkoutManager(context: Context) : SensorEventListener {
     val hrAverage: Double? get() = if (hrCount > 0) hrSum / hrCount else null
     val hrMaxOrNull: Double? get() = if (hrMax > 0) hrMax else null
 
+    /// Stato grezzo degli accumulatori HR — usato dal checkpoint periodico
+    /// di TrackingService (serve sum/count, non solo la media, per poter
+    /// continuare ad accumulare dopo un restore()).
+    data class HrSnapshot(val hrSum: Double, val hrCount: Int, val hrMax: Double)
+
+    fun snapshot(): HrSnapshot = HrSnapshot(hrSum, hrCount, hrMax)
+
+    /// Crash recovery: ripristina gli accumulatori da un checkpoint invece
+    /// di ripartire da zero (altrimenti avg/max di ore di allenamento
+    /// andrebbero persi ad ogni restart del processo).
+    fun restore(snapshot: HrSnapshot) {
+        hrSum = snapshot.hrSum
+        hrCount = snapshot.hrCount
+        hrMax = snapshot.hrMax
+    }
+
     fun resetHrAccumulation() {
         hrSum = 0.0
         hrCount = 0
