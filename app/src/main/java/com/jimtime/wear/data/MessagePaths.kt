@@ -52,4 +52,10 @@ object MessagePaths {
     const val CMD_SYNC_ACK = "syncAck"
     /// Sessione palestra/intervalli standalone dal polso → telefono.
     const val CMD_GYM_SESSION_SYNC = "gymSessionSync"
+
+    // "Oggi" home: riepilogo giornaliero phone → watch e coda acqua
+    // watch → phone (vedi spec-contract.md "Watch Oggi home wire contract").
+    const val CMD_DAILY_SUMMARY         = "dailySummary"
+    const val CMD_REQUEST_DAILY_SUMMARY = "requestDailySummary"
+    const val CMD_WATER_DELTA           = "waterDelta"
 }

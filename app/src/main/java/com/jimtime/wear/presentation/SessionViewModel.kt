@@ -1,16 +1,21 @@
 package com.jimtime.wear.presentation
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jimtime.wear.data.ActiveSessionStore
+import com.jimtime.wear.data.DailySummary
+import com.jimtime.wear.data.DailySummaryStore
 import com.jimtime.wear.data.GpsPoint
 import com.jimtime.wear.data.IntervalSpec
 import com.jimtime.wear.data.MessagePaths
 import com.jimtime.wear.data.PendingGymStore
 import com.jimtime.wear.data.SessionKind
+import com.jimtime.wear.data.WaterDelta
+import com.jimtime.wear.data.WaterQueueStore
 import com.jimtime.wear.data.WorkoutContext
 import com.jimtime.wear.data.WorkoutCursor
 import com.jimtime.wear.data.WorkoutTarget
@@ -27,8 +32,11 @@ import com.jimtime.wear.health.TrackingEngine
 import com.jimtime.wear.health.TrackingService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -55,12 +63,44 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     val planName: StateFlow<String> = PlanDaysStore.planName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 
+    val dailySummary: StateFlow<DailySummary?> = DailySummaryStore.summary
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val summaryReceivedAt: StateFlow<Long> = DailySummaryStore.receivedAt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
+
+    /// Somma dei delta in coda per la data locale ODIERNA — un delta
+    /// accodato ieri sera e non ancora ackato non deve sporcare il totale
+    /// mostrato oggi (vedi displayed-water rule nel contratto).
+    val pendingWaterMl: StateFlow<Int> = WaterQueueStore.queue
+        .map { deltas ->
+            val today = DailySummaryStore.todayLocal()
+            deltas.filter { it.date == today }.sumOf { it.deltaMl }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    /// Quanti tap acqua di OGGI aspettano ancora l'ack — guida la caption
+    /// "in attesa del telefono" (la somma può fare 0 con un + e un − in coda).
+    val pendingWaterCount: StateFlow<Int> = WaterQueueStore.queue
+        .map { deltas ->
+            val today = DailySummaryStore.todayLocal()
+            deltas.count { it.date == today }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    private val prefs = application.getSharedPreferences("jimtime_prefs", Context.MODE_PRIVATE)
+
+    private val _lastUsedType = MutableStateFlow(prefs.getString(KEY_LAST_USED_TYPE, null))
+    val lastUsedType: StateFlow<String?> = _lastUsedType.asStateFlow()
+
     private var timerJob: Job? = null
     private var hrSendJob: Job? = null
     private var retryJob: Job? = null
 
     init {
         PlanDaysStore.load(application)
+        DailySummaryStore.load(application)
+        WaterQueueStore.load(application)
         // Sync intervalli rimasto in outbox da una sessione chiusa offline.
         viewModelScope.launch {
             PendingGymStore.load(application)?.let { pending ->
@@ -76,6 +116,20 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         // list in case a push happened while we were disconnected.
         viewModelScope.launch {
             phoneConnector.sendToPhone(MessagePaths.CMD_REQUEST_PLAN_DAYS)
+        }
+        requestDailySummary()
+        // Un nuovo dailySummary è la prova che il phone è vivo — flush
+        // della coda acqua. Skippa la primissima emissione: è solo l'eco
+        // della cache locale caricata sopra (load()), non un arrivo fresco.
+        viewModelScope.launch {
+            var first = true
+            DailySummaryStore.summary.collect {
+                if (first) {
+                    first = false
+                    return@collect
+                }
+                flushWaterQueue()
+            }
         }
         startPendingRouteRetry()
         // Sync intervalli rimasto in outbox da una sessione chiusa offline.
@@ -131,6 +185,11 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     // ── Public actions ────────────────────────────────────────────────────────
 
     fun startFromWatch(activityType: String) {
+        // Il countdown può scattare nello stesso istante in cui il telefono
+        // avvia una sessione (startSession in arrivo): mai sovrascrivere una
+        // sessione già viva con un secondo avvio dal polso.
+        if (SessionRepository.state.value.isActive) return
+        persistLastUsedType(activityType)
         viewModelScope.launch {
             TrackingEngine.workoutManager.resetHrAccumulation()
             val reachable = phoneConnector.isPhoneReachable()
@@ -296,6 +355,86 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             )
             onResult(true)
         }
+    }
+
+    // ── "Oggi" home (riepilogo giornaliero + coda acqua) ────────────────
+
+    /// Inviata all'attivazione/foreground e sul refresh manuale del footer
+    /// (spec-contract.md). Fire-and-forget: la risposta arriva async via
+    /// PhoneMessageService → DailySummaryStore, osservata sopra.
+    fun requestDailySummary() {
+        viewModelScope.launch {
+            phoneConnector.sendToPhone(MessagePaths.CMD_REQUEST_DAILY_SUMMARY)
+        }
+    }
+
+    /// Tap su "Nessuna scheda" nel picker: ri-chiede la lista giorni al
+    /// telefono (i messaggi Wear non sono cachati lato phone — vedi init).
+    fun requestPlanDays() {
+        viewModelScope.launch {
+            phoneConnector.sendToPhone(MessagePaths.CMD_REQUEST_PLAN_DAYS)
+        }
+    }
+
+    /// Tap +/- sulla card Acqua. Guardia il valore visualizzato (somma
+    /// cache + coda odierna) a >= 0 PRIMA di accodare, stessa regola usata
+    /// per disabilitare il bottone "-" in UI — mai un delta che porterebbe
+    /// il totale sotto zero. Ottimistico: accoda e prova a inviare subito,
+    /// la entry sparisce solo per ack/appliedWaterSyncIds (mai su invio
+    /// riuscito), stesso pattern di PendingRouteStore.
+    fun addWater(deltaMl: Int) {
+        val today = DailySummaryStore.todayLocal()
+        val summary = DailySummaryStore.summary.value
+        val cachedMl = if (summary?.date == today) summary.water.ml else 0
+        val pendingToday = WaterQueueStore.queue.value
+            .filter { it.date == today }
+            .sumOf { it.deltaMl }
+        val displayed = (cachedMl + pendingToday).coerceAtLeast(0)
+        if (deltaMl < 0 && displayed <= 0) return
+
+        getApplication<Application>().vibrate(30)
+        val delta = WaterDelta(
+            syncId = UUID.randomUUID().toString(),
+            deltaMl = deltaMl,
+            date = today,
+            at = System.currentTimeMillis(),
+        )
+        WaterQueueStore.enqueue(getApplication(), delta)
+        flushWaterQueue()
+    }
+
+    /// Reinvia OGNI delta ancora in coda (mai solo l'ultimo): il phone è
+    /// idempotente per syncId, quindi un re-invio è innocuo, ma saltarne
+    /// uno lo perderebbe silenziosamente se il tap successivo arrivasse
+    /// prima dell'ack. Chiamata da onForeground, dal tap stesso, e
+    /// dall'arrivo di un nuovo dailySummary (prova che il phone è vivo).
+    fun flushWaterQueue() {
+        viewModelScope.launch {
+            if (!phoneConnector.isPhoneReachable()) return@launch
+            WaterQueueStore.queue.value.forEach { delta ->
+                phoneConnector.sendToPhone(
+                    MessagePaths.CMD_WATER_DELTA,
+                    mapOf(
+                        "syncId" to delta.syncId,
+                        "deltaMl" to delta.deltaMl,
+                        "date" to delta.date,
+                        "at" to delta.at,
+                    ),
+                )
+            }
+        }
+    }
+
+    /// Chiamata da MainActivity.onResume — pull fresco del riepilogo +
+    /// flush di eventuali delta rimasti in coda da prima del background.
+    fun onForeground() {
+        requestDailySummary()
+        flushWaterQueue()
+    }
+
+    private fun persistLastUsedType(type: String) {
+        prefs.edit().putString(KEY_LAST_USED_TYPE, type).apply()
+        _lastUsedType.value = type
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -611,5 +750,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         /// Unica fonte di verità: prima duplicata (e disallineata — hike/
         /// trail mancavano) tra startFromWatch e resumeFromWatch.
         val GPS_ACTIVITY_TYPES = setOf("run", "walk", "bike", "hike", "trail")
+
+        private const val KEY_LAST_USED_TYPE = "lastUsedType"
     }
 }

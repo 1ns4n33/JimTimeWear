@@ -17,6 +17,8 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
@@ -68,12 +70,27 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
-            val heartRate    by viewModel.heartRate.collectAsStateWithLifecycle()
-            val planDays     by viewModel.planDays.collectAsStateWithLifecycle()
-            val planName     by viewModel.planName.collectAsStateWithLifecycle()
+            val sessionState     by viewModel.sessionState.collectAsStateWithLifecycle()
+            val heartRate        by viewModel.heartRate.collectAsStateWithLifecycle()
+            val planDays         by viewModel.planDays.collectAsStateWithLifecycle()
+            val planName         by viewModel.planName.collectAsStateWithLifecycle()
+            val dailySummary     by viewModel.dailySummary.collectAsStateWithLifecycle()
+            val summaryReceivedAt by viewModel.summaryReceivedAt.collectAsStateWithLifecycle()
+            val pendingWaterMl   by viewModel.pendingWaterMl.collectAsStateWithLifecycle()
+            val pendingWaterCount by viewModel.pendingWaterCount.collectAsStateWithLifecycle()
+            val lastUsedType     by viewModel.lastUsedType.collectAsStateWithLifecycle()
 
             val navController = rememberSwipeDismissableNavController()
+
+            // Un solo countdown alla volta: due tap ravvicinati su due cerchi
+            // (o sullo stesso) impilavano due destinazioni "countdown/*" e
+            // "Annulla" riportava sul PRIMO countdown, che ripartiva da 3 e
+            // poteva avviare un'attività che l'atleta credeva annullata.
+            val openCountdown: (String) -> Unit = { type ->
+                val onCountdown = navController.currentDestination?.route
+                    ?.startsWith("countdown/") == true
+                if (!onCountdown) navController.navigate("countdown/$type")
+            }
 
             SwipeDismissableNavHost(
                 navController    = navController,
@@ -81,21 +98,58 @@ class MainActivity : ComponentActivity() {
             ) {
                 composable("idle") {
                     var phoneNeeded by remember { mutableStateOf(false) }
-                    IdleScreen(
-                        onStart = { activityType ->
-                            viewModel.startFromWatch(activityType)
+                    HomeScreen(
+                        dailySummary       = dailySummary,
+                        summaryReceivedAt  = summaryReceivedAt,
+                        pendingWaterMl     = pendingWaterMl,
+                        pendingWaterCount  = pendingWaterCount,
+                        lastUsedType       = lastUsedType,
+                        planName           = planName,
+                        planDays           = planDays,
+                        showPhoneNeeded    = phoneNeeded,
+                        onStartPlanDay     = { week, day ->
+                            viewModel.startPlanDayFromWatch(week, day) { ok ->
+                                phoneNeeded = !ok
+                            }
                         },
+                        onQuickStart       = openCountdown,
+                        onOpenPicker       = { navController.navigate("pick") },
+                        onOpenIntervals    = { navController.navigate("intervals") },
+                        onAddWater         = { delta -> viewModel.addWater(delta) },
+                        onRefresh          = { viewModel.requestDailySummary() },
+                    )
+                }
+                composable("pick") {
+                    var phoneNeeded by remember { mutableStateOf(false) }
+                    ActivityPickerScreen(
                         planName = planName,
                         planDays = planDays,
-                        showPhoneNeeded = phoneNeeded,
-                        onStartInterval = { spec ->
-                            viewModel.startIntervalStandalone(spec)
-                        },
                         onStartPlanDay = { day ->
                             viewModel.startPlanDayFromWatch(day.week, day.day) { ok ->
                                 phoneNeeded = !ok
                             }
                         },
+                        onTapActivity = openCountdown,
+                        showPhoneNeeded = phoneNeeded,
+                        onRequestPlanDays = { viewModel.requestPlanDays() },
+                    )
+                }
+                composable("intervals") {
+                    IntervalsScreen(
+                        onStartInterval = { spec ->
+                            viewModel.startIntervalStandalone(spec)
+                        },
+                    )
+                }
+                composable(
+                    route = "countdown/{type}",
+                    arguments = listOf(navArgument("type") { type = NavType.StringType }),
+                ) { backStackEntry ->
+                    val activityType = backStackEntry.arguments?.getString("type") ?: "run"
+                    CountdownScreen(
+                        activityType = activityType,
+                        onGo = { type -> viewModel.startFromWatch(type) },
+                        onCancel = { navController.popBackStack() },
                     )
                 }
                 composable("session") {
@@ -138,5 +192,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /// Pull fresco del riepilogo "Oggi" + flush della coda acqua ad ogni
+    /// ritorno in foreground (spec-contract.md regola 2 e 5 — il transport
+    /// è message-only, mai applicationContext, quindi il polso deve tirare
+    /// lui i dati appena torna visibile).
+    override fun onResume() {
+        super.onResume()
+        viewModel.onForeground()
     }
 }

@@ -10,17 +10,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,39 +32,24 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
-import com.jimtime.wear.data.IntervalSpec
 import com.jimtime.wear.data.PlanDay
 import com.jimtime.wear.presentation.theme.JTColors
 import com.jimtime.wear.presentation.theme.JimTimeWearTheme
 
-private data class ActivityType(val id: String, val label: String, val emoji: String)
-
-private val activityTypes = listOf(
-    ActivityType("run",            "Corsa",                 "🏃"),
-    ActivityType("walk",           "Camminata",             "🚶"),
-    ActivityType("bike",           "Bici",                  "🚴"),
-    ActivityType("hike",           "Escursione",            "🥾"),
-    ActivityType("trail",          "Trail",                 "🌲"),
-    ActivityType("treadmill_run",  "Tapis roulant corsa",   "🏃"),
-    ActivityType("treadmill_walk", "Tapis roulant cammino", "🚶"),
-    ActivityType("indoor_cycling", "Bici indoor",           "🚴"),
-    ActivityType("meditation",     "Meditazione",           "🧘"),
-    ActivityType("pilates",        "Pilates",               "🤸"),
-    ActivityType("yoga",           "Yoga",                  "🤸"),
-    ActivityType("stretching",     "Stretching",            "🙆"),
-)
-
+/**
+ * "Tutte le attività" — SCHEDA (plan days, starts exactly like the hero
+ * card) + OUTDOOR/INDOOR (tap starts the countdown, then the session —
+ * no more select-then-scroll-to-"Inizia").
+ */
 @Composable
-fun IdleScreen(
-    onStart: (String) -> Unit = {},
-    planName: String = "",
-    planDays: List<PlanDay> = emptyList(),
+fun ActivityPickerScreen(
+    planName: String,
+    planDays: List<PlanDay>,
+    onStartPlanDay: (PlanDay) -> Unit,
+    onTapActivity: (String) -> Unit,
     showPhoneNeeded: Boolean = false,
-    onStartPlanDay: (PlanDay) -> Unit = {},
-    onStartInterval: (IntervalSpec) -> Unit = {},
+    onRequestPlanDays: () -> Unit = {},
 ) {
-    var selected by remember { mutableStateOf("run") }
-
     JimTimeWearTheme {
         AppScaffold {
             ScreenScaffold {
@@ -80,80 +60,74 @@ fun IdleScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    item { BrandHeader() }
-
-                    // ── Active plan days (pushed by the phone) ─────────
-                    if (planDays.isNotEmpty()) {
+                    item {
+                        SectionLabel(
+                            text = "📋 ${planName.ifEmpty { "Scheda" }}",
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                    if (showPhoneNeeded) {
                         item {
-                            SectionLabel(
-                                text = "📋 ${planName.ifEmpty { "Scheda attiva" }}",
-                                modifier = Modifier.padding(top = 4.dp),
+                            // Stesso hint della home: la scheda parte solo col
+                            // telefono raggiungibile (il motore vive lì).
+                            Text(
+                                text = "📵 Serve il telefono per avviare la scheda",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = JTColors.danger,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
-                        if (showPhoneNeeded) {
-                            item {
+                    }
+                    if (planDays.isEmpty()) {
+                        item {
+                            // Il Wear non ha ancora un segnale di sincronizzazione
+                            // scheda (planSyncStatus, solo lato iOS): il tap
+                            // ri-chiede la lista al telefono, come su iOS.
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color.White.copy(alpha = 0.08f))
+                                    .clickable(onClick = onRequestPlanDays)
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                            ) {
                                 Text(
-                                    text = "📵 Serve il telefono per avviare la scheda",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = JTColors.danger,
-                                    textAlign = TextAlign.Center,
+                                    text = "↻ Nessuna scheda",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    text = "Apri JimTime sul telefono e tocca qui",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
+                    } else {
                         planDays.forEach { day ->
                             item {
                                 PlanDayChip(day = day, onClick = { onStartPlanDay(day) })
                             }
                         }
-                        item {
-                            SectionLabel(
-                                text = "Attività",
-                                modifier = Modifier.padding(top = 6.dp),
-                            )
-                        }
                     }
-                    // ── Intervalli: quick start standalone dal polso ──
-                    item {
-                        SectionLabel(
-                            text = "⏱ Intervalli",
-                            modifier = Modifier.padding(top = 6.dp),
-                        )
-                    }
-                    IntervalSpec.presets.forEach { spec ->
-                        item {
-                            androidx.wear.compose.material3.Button(
-                                onClick = { onStartInterval(spec) },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(
-                                    text = "${spec.modeLabel} · ${spec.compactLabel}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                )
-                            }
-                        }
-                    }
-
-                    activityTypes.forEach { type ->
-                        item {
-                            ActivityChip(
-                                type     = type,
-                                selected = selected == type.id,
-                                onClick  = { selected = type.id },
-                            )
-                        }
-                    }
-
-                    item { Spacer(Modifier.height(4.dp)) }
-
-                    item { StartCta(onClick = { onStart(selected) }) }
 
                     item {
-                        Text(
-                            text = "o avvia dall'app",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
+                        SectionLabel(text = "Outdoor", modifier = Modifier.padding(top = 8.dp))
+                    }
+                    ActivityCatalog.outdoor.forEach { type ->
+                        item {
+                            ActivityRow(type = type, onClick = { onTapActivity(type.id) })
+                        }
+                    }
+
+                    item {
+                        SectionLabel(text = "Indoor", modifier = Modifier.padding(top = 8.dp))
+                    }
+                    ActivityCatalog.indoor.forEach { type ->
+                        item {
+                            ActivityRow(type = type, onClick = { onTapActivity(type.id) })
+                        }
                     }
                 }
             }
@@ -161,30 +135,6 @@ fun IdleScreen(
     }
 }
 
-/** "JimTime" title with a small brand-violet dot suffix. */
-@Composable
-private fun BrandHeader() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-        modifier = Modifier.padding(top = 8.dp),
-    ) {
-        Text(
-            text = "JimTime",
-            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.width(3.dp))
-        Box(
-            modifier = Modifier
-                .size(5.dp)
-                .clip(CircleShape)
-                .background(JTColors.brand),
-        )
-    }
-}
-
-/** Tiny uppercase section label, aligned leading, letter-spaced. */
 @Composable
 private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
@@ -204,11 +154,9 @@ private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     )
 }
 
+/** Plan-day row — brand gradient chip, tap starts the day directly (existing path). */
 @Composable
-private fun PlanDayChip(
-    day: PlanDay,
-    onClick: () -> Unit,
-) {
+private fun PlanDayChip(day: PlanDay, onClick: () -> Unit) {
     val shape = RoundedCornerShape(14.dp)
     Box(
         modifier = Modifier
@@ -230,7 +178,6 @@ private fun PlanDayChip(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Leading rounded-square dumbbell badge.
             Box(
                 modifier = Modifier
                     .size(27.dp)
@@ -260,7 +207,6 @@ private fun PlanDayChip(
                 )
             }
             Spacer(Modifier.width(6.dp))
-            // Trailing filled play glyph in brand violet.
             Box(
                 modifier = Modifier
                     .size(20.dp)
@@ -274,26 +220,16 @@ private fun PlanDayChip(
     }
 }
 
+/** Outdoor/indoor chip — WITHOUT the old selection checkmark, tap = countdown → start. */
 @Composable
-private fun ActivityChip(
-    type: ActivityType,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
+private fun ActivityRow(type: ActivityTypeInfo, onClick: () -> Unit) {
     val accent = JTColors.activity(type.id)
     val shape = RoundedCornerShape(12.dp)
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(
-                if (selected) accent.copy(alpha = 0.16f)
-                else Color.White.copy(alpha = 0.06f)
-            )
-            .then(
-                if (selected) Modifier.border(1.5.dp, accent, shape)
-                else Modifier
-            )
+            .background(Color.White.copy(alpha = 0.06f))
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
@@ -301,7 +237,6 @@ private fun ActivityChip(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Leading circular activity badge.
             Box(
                 modifier = Modifier
                     .size(26.dp)
@@ -319,52 +254,17 @@ private fun ActivityChip(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (selected) {
-                Spacer(Modifier.width(4.dp))
-                Box(
-                    modifier = Modifier
-                        .size(16.dp)
-                        .clip(CircleShape)
-                        .background(accent),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        "✓",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black,
-                    )
-                }
-            }
         }
-    }
-}
-
-/** Full-width capsule CTA with the brand violet gradient. */
-@Composable
-private fun StartCta(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(44.dp)
-            .clip(CircleShape)
-            .background(
-                Brush.horizontalGradient(listOf(JTColors.brand, JTColors.brandBright))
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "▶ Inizia",
-            textAlign = TextAlign.Center,
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-        )
     }
 }
 
 @WearPreviewDevices
 @Composable
-private fun IdleScreenPreview() {
-    IdleScreen()
+private fun ActivityPickerScreenPreview() {
+    ActivityPickerScreen(
+        planName = "",
+        planDays = emptyList(),
+        onStartPlanDay = {},
+        onTapActivity = {},
+    )
 }

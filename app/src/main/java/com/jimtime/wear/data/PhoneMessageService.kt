@@ -42,7 +42,20 @@ class PhoneMessageService : WearableListenerService() {
                 PlanDaysStore.apply(applicationContext, json.optString("planName"), days)
             }
             MessagePaths.CMD_SYNC_ACK -> handleSyncAck(json)
+            MessagePaths.CMD_DAILY_SUMMARY -> handleDailySummary(json)
         }
+    }
+
+    /// Riepilogo "Oggi" — message-only (mai applicationContext, vedi
+    /// spec-contract.md), quindi lo store fa da cache persistente letta
+    /// dalla VM al prossimo foreground. `appliedWaterSyncIds` è un
+    /// belt-and-suspenders rispetto al syncAck: la coda acqua droppa anche
+    /// qui i delta che il telefono conferma di aver già applicato.
+    private fun handleDailySummary(json: JSONObject) {
+        DailySummaryStore.apply(applicationContext, json)
+        val appliedArr = json.optJSONArray("appliedWaterSyncIds") ?: return
+        val applied = (0 until appliedArr.length()).map { appliedArr.optString(it) }
+        WaterQueueStore.removeAll(applicationContext, applied)
     }
 
     /// Il phone conferma di aver persistito una routeSync/sessionSync.
@@ -55,6 +68,10 @@ class PhoneMessageService : WearableListenerService() {
         // Rimuove solo la entry che corrisponde a questo ack — la coda può
         // contenere altre route ancora in attesa (vedi PendingRouteStore).
         PendingRouteStore.remove(applicationContext, ackSyncId)
+        // Un syncAck ora conferma ANCHE un waterDelta (spec-contract.md) —
+        // rimozione no-op se l'id non è in coda (route sync vs water sync
+        // condividono lo stesso comando).
+        WaterQueueStore.remove(applicationContext, ackSyncId)
     }
 
     // MARK: - Workout helpers

@@ -28,6 +28,21 @@ object JTColors {
     /** Hearts / bpm. */
     val hr = Color(0xFFFF375F)
 
+    /** Acqua card — sky/cyan. */
+    val water = Color(0xFF38BDF8)
+
+    /** Nutrizione card — orange. */
+    val food = Color(0xFFFF9F0A)
+
+    /** Barra macro proteine — alias del brand violet. */
+    val protein = brand
+
+    /** Barra macro carboidrati. */
+    val carbs = Color(0xFFFFD60A)
+
+    /** Barra macro grassi. */
+    val fat = Color(0xFFFF6B9D)
+
     private val activityColors = mapOf(
         "run"            to Color(0xFFFF8A3D),
         "walk"           to Color(0xFF18A957),
