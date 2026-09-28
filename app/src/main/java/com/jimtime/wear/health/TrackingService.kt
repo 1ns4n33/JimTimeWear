@@ -20,7 +20,9 @@ import com.jimtime.wear.data.ActiveSessionStore
 import com.jimtime.wear.data.PendingRouteStore
 import com.jimtime.wear.data.SessionKind
 import com.jimtime.wear.data.SessionRepository
+import com.jimtime.wear.data.SessionState
 import com.jimtime.wear.presentation.MainActivity
+import com.jimtime.wear.presentation.vibrate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -47,6 +49,14 @@ class TrackingService : Service() {
     private var stateJob: Job? = null
     private var tickerJob: Job? = null
     private var checkpointJob: Job? = null
+
+    // F5b (Nuoto) — guardia idempotenza: SessionRepository.state riemette
+    // ad OGNI update (tick, updateSwimMetrics), ma startExerciseAsync/
+    // pauseExerciseAsync non lo sono — vanno chiamati una volta sola per
+    // transizione, non ad ogni ricomposizione dell'observer.
+    private var swimJob: Job? = null
+    private var swimStartedAt: Long? = null
+    private var swimPaused = false
 
     override fun onCreate() {
         super.onCreate()
@@ -76,6 +86,7 @@ class TrackingService : Service() {
         stateJob?.cancel()
         tickerJob?.cancel()
         checkpointJob?.cancel()
+        swimJob?.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
     }
@@ -87,6 +98,12 @@ class TrackingService : Service() {
             SessionRepository.state.collect { state ->
                 val owned = state.isStandalone && state.kind == SessionKind.ACTIVITY
                 if (!owned) return@collect
+
+                if (TrackingEngine.isSwimActivity(state.activityType)) {
+                    observeSwim(state)
+                    return@collect
+                }
+
                 val gpsEligible = TrackingEngine.isGpsEligible(state.activityType)
                 when {
                     state.isActive && !state.isPaused -> {
@@ -106,12 +123,70 @@ class TrackingService : Service() {
         }
     }
 
+    /// F5b — variante swim di [observeSession]: nessun gpsTracker/
+    /// workoutManager, sensori posseduti da [TrackingEngine.swimSource]
+    /// (ExerciseClient). Auto-pause OFF (D4): pausa/resume sono SOLO
+    /// comandi espliciti dal polso, mai automatici.
+    private suspend fun observeSwim(state: SessionState) {
+        when {
+            state.isActive && !state.isPaused -> {
+                if (swimStartedAt != state.startedAt) {
+                    TrackingEngine.swimSource.start(
+                        openWater   = state.activityType == "swim_open_water",
+                        poolLengthM = state.swim?.poolLengthM,
+                    )
+                    swimStartedAt = state.startedAt
+                    swimPaused = false
+                    startSwimMetricsCollector()
+                    // F5b (§7) — la guida parte SOLO se una serie è stata
+                    // scelta (SwimStartScreen) o è arrivata incorporata in
+                    // startSession.swim.workout; SwimGuideRepository.start
+                    // con workout null è un no-op esplicito (nessuna guida).
+                    SwimGuideRepository.start(state.swim?.workout, state.startedAt)
+                } else if (swimPaused) {
+                    TrackingEngine.swimSource.resume()
+                    swimPaused = false
+                }
+                startTicker()
+            }
+            state.isPaused -> {
+                if (swimStartedAt == state.startedAt && !swimPaused) {
+                    TrackingEngine.swimSource.pause()
+                    swimPaused = true
+                }
+                stopTicker()
+            }
+            !state.isActive -> finishAndStop()
+        }
+    }
+
+    private fun startSwimMetricsCollector() {
+        if (swimJob?.isActive == true) return
+        swimJob = scope.launch {
+            TrackingEngine.swimSource.metrics.collect { m ->
+                SessionRepository.updateSwimMetrics(m.distanceMeters, m.laps, m.strokes)
+            }
+        }
+    }
+
     private fun startTicker() {
         if (tickerJob?.isActive == true) return
         tickerJob = scope.launch {
             while (true) {
                 delay(1_000)
                 SessionRepository.tick()
+                // F5b (§7) — avanza la guida SOLO per una sessione swim in
+                // corso; questo stesso ticker è condiviso con GPS/HR, dove
+                // la guida non esiste (SwimGuideRepository.tick su nessuna
+                // serie attiva è comunque un no-op, ma il check evita di
+                // interrogarla ad ogni secondo per niente sulle altre attività).
+                if (swimStartedAt != null) {
+                    when (SwimGuideRepository.tick(System.currentTimeMillis())) {
+                        SwimGuideEvent.REP_START -> applicationContext.vibrate(40)
+                        SwimGuideEvent.SET_CHANGE -> applicationContext.vibrate(150)
+                        SwimGuideEvent.NONE -> {}
+                    }
+                }
             }
         }
     }
@@ -121,11 +196,25 @@ class TrackingService : Service() {
         tickerJob = null
     }
 
-    private fun finishAndStop() {
+    private suspend fun finishAndStop() {
         stopTicker()
-        TrackingEngine.workoutManager.stopMonitoring()
-        TrackingEngine.gpsTracker.stop()
-        TrackingEngine.resetGpsTracking()
+        if (swimStartedAt != null) {
+            // F5b — endExercise + clearUpdateCallback; il payload swim per
+            // il phone è già stato costruito PRIMA di questa transizione
+            // (SessionViewModel.stopFromWatch legge swimSource.metrics.value
+            // sincrono, poi chiama SessionRepository.stopSession()) — qui è
+            // solo cleanup del client, mai la fonte del dato inviato.
+            runCatching { TrackingEngine.swimSource.stop() }
+            swimJob?.cancel()
+            swimJob = null
+            swimStartedAt = null
+            swimPaused = false
+            SwimGuideRepository.stop()
+        } else {
+            TrackingEngine.workoutManager.stopMonitoring()
+            TrackingEngine.gpsTracker.stop()
+            TrackingEngine.resetGpsTracking()
+        }
         // Il checkpoint va cancellato SOLO se una copia definitiva è già
         // stata scritta in PendingRouteStore (stopFromWatch la scrive
         // PRIMA di flippare lo stato) — altrimenti un crash/kill che porta
@@ -164,6 +253,8 @@ class TrackingService : Service() {
                         hrSum        = hr.hrSum,
                         hrCount      = hr.hrCount,
                         hrMax        = hr.hrMax,
+                        swimLocation    = state.swim?.location,
+                        swimPoolLengthM = state.swim?.poolLengthM,
                     ),
                 )
             }
@@ -207,7 +298,21 @@ class TrackingService : Service() {
             // concessa lancia SecurityException qui — senza permesso il
             // GPS non servirebbe comunque a nulla, meglio chiudersi che
             // crashare il processo.
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            //
+            // F5b: per swim_pool/swim_open_water si dichiara ANCHE "health"
+            // (ExerciseClient) oltre a "location" — quest'ultimo resta utile
+            // per swim_open_water (GPS via Health Services). Il tipo
+            // FOREGROUND_SERVICE_TYPE_HEALTH esiste solo da API 34: sotto,
+            // "location" da solo basta comunque a tenere viva la FGS.
+            val state = SessionRepository.state.value
+            val type = if (TrackingEngine.isSwimActivity(state.activityType) &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+            ) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            }
+            startForeground(NOTIFICATION_ID, notification, type)
         } catch (e: Exception) {
             Log.e(TAG, "startForeground(location) failed — stopping", e)
             stopSelf()

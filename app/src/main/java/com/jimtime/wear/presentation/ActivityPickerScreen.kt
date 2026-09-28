@@ -129,6 +129,20 @@ fun ActivityPickerScreen(
                             ActivityRow(type = type, onClick = { onTapActivity(type.id) })
                         }
                     }
+
+                    // F5b (Nuoto, D11) — sezione dedicata: il tap qui passa
+                    // da SwimStartScreen (lunghezza vasca), non dal
+                    // countdown generico — vedi onTapActivity in MainActivity.
+                    if (ActivityCatalog.swim.isNotEmpty()) {
+                        item {
+                            SectionLabel(text = "Nuoto", modifier = Modifier.padding(top = 8.dp))
+                        }
+                        ActivityCatalog.swim.forEach { type ->
+                            item {
+                                ActivityRow(type = type, onClick = { onTapActivity(type.id) })
+                            }
+                        }
+                    }
                 }
             }
         }

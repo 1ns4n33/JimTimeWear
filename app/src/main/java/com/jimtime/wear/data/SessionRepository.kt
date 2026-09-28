@@ -8,20 +8,27 @@ object SessionRepository {
     private val _state = MutableStateFlow(SessionState())
     val state: StateFlow<SessionState> = _state.asStateFlow()
 
-    fun startSession(type: String, startedAt: Long) {
+    fun startSession(type: String, startedAt: Long, swim: SwimData? = null) {
         val alreadyElapsed = ((System.currentTimeMillis() - startedAt) / 1000L).coerceAtLeast(0L)
         _state.value = SessionState(
             isActive       = true,
             activityType   = type,
             startedAt      = startedAt,
             elapsedSeconds = alreadyElapsed,
-            isStandalone   = false,
+            // F5b: il nuoto è SEMPRE posseduto localmente da TrackingService
+            // (ExerciseClient) — mai dal telefono, che sott'acqua non ha
+            // modo di sapere cosa sta succedendo. Anche quando questa
+            // sessione arriva da un comando `startSession` del telefono
+            // (l'atleta l'ha avviata dall'app prima di entrare in acqua),
+            // il polso resta la sola sorgente di verità dei sensori.
+            isStandalone   = swim != null,
             kind           = SessionKind.ACTIVITY,
             workout        = null,
+            swim           = swim,
         )
     }
 
-    fun startStandaloneSession(type: String) {
+    fun startStandaloneSession(type: String, swim: SwimData? = null) {
         _state.value = SessionState(
             isActive     = true,
             activityType = type,
@@ -29,6 +36,17 @@ object SessionRepository {
             isStandalone = true,
             kind         = SessionKind.ACTIVITY,
             workout      = null,
+            swim         = swim,
+        )
+    }
+
+    /// F5b — aggregati correnti dal `HealthServicesExerciseSource` di
+    /// `TrackingService`. No-op se la sessione attiva non è swim (difesa
+    /// contro un update tardivo dopo uno stop/cambio attività).
+    fun updateSwimMetrics(distanceMeters: Double, laps: Int, strokes: Int) {
+        val swim = _state.value.swim ?: return
+        _state.value = _state.value.copy(
+            swim = swim.copy(distanceMeters = distanceMeters, laps = laps, strokes = strokes),
         )
     }
 
@@ -62,7 +80,12 @@ object SessionRepository {
     /// teneva preciso attraverso le pause è andato perso col processo —
     /// non torna esatto se c'erano state pause, ma è la sola sorgente di
     /// verità sopravvissuta al kill.
-    fun restoreStandaloneSession(activityType: String, startedAt: Long, isPaused: Boolean) {
+    fun restoreStandaloneSession(
+        activityType: String,
+        startedAt: Long,
+        isPaused: Boolean,
+        swim: SwimData? = null,
+    ) {
         val elapsed = ((System.currentTimeMillis() - startedAt) / 1000L).coerceAtLeast(0L)
         _state.value = SessionState(
             isActive       = true,
@@ -73,6 +96,7 @@ object SessionRepository {
             isStandalone   = true,
             kind           = SessionKind.ACTIVITY,
             workout        = null,
+            swim           = swim,
         )
     }
 

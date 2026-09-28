@@ -4,6 +4,7 @@ import android.content.Context
 import com.jimtime.wear.data.ActiveSessionStore
 import com.jimtime.wear.data.PendingRouteStore
 import com.jimtime.wear.data.SessionRepository
+import com.jimtime.wear.data.SwimData
 import com.jimtime.wear.presentation.SessionViewModel
 import java.util.UUID
 
@@ -19,6 +20,12 @@ object TrackingEngine {
     lateinit var gpsTracker: GpsTracker
         private set
     lateinit var workoutManager: WearWorkoutManager
+        private set
+
+    /// F5b (Nuoto) — sorgente Health Services dedicata a swim_pool/
+    /// swim_open_water, SEPARATA da gpsTracker/workoutManager: usata solo
+    /// quando `isSwim(activityType)` è vero.
+    lateinit var swimSource: HealthServicesExerciseSource
         private set
 
     private var initialized = false
@@ -39,6 +46,7 @@ object TrackingEngine {
         val appContext = context.applicationContext
         gpsTracker = GpsTracker(appContext)
         workoutManager = WearWorkoutManager(appContext)
+        swimSource = HealthServicesExerciseSource(appContext)
         initialized = true
     }
 
@@ -85,19 +93,35 @@ object TrackingEngine {
         }
 
         val ageMs = System.currentTimeMillis() - checkpoint.lastUpdateMs
+        val isSwim = isSwimActivity(checkpoint.activityType)
         if (ageMs < RECOVERY_WINDOW_MS) {
             // Checkpoint "caldo": riprendiamo la sessione dal vivo. Il
             // chiamante (TrackingService.observeSession, o MainActivity
             // che riavvia il service) farà partire GPS/HR in avanti.
-            gpsTracker.restore(checkpoint.points)
-            workoutManager.restore(
-                WearWorkoutManager.HrSnapshot(checkpoint.hrSum, checkpoint.hrCount, checkpoint.hrMax)
-            )
-            markGpsRestored(checkpoint.startedAt)
+            //
+            // F5b: per il nuoto non c'è un checkpoint di vasche/bracciate da
+            // ripristinare (ExerciseClient le tiene lui, non noi) — un
+            // process death qui riparte da 0 su quei due contatori quando
+            // TrackingService richiama swimSource.start(); distanza/HR
+            // riprendono a salire normalmente dal nuovo start. Degrado
+            // accettato: raro (serve un kill di processo proprio durante
+            // una sessione swim) e comunque preferibile a perdere l'intera
+            // sessione.
+            if (!isSwim) {
+                gpsTracker.restore(checkpoint.points)
+                workoutManager.restore(
+                    WearWorkoutManager.HrSnapshot(checkpoint.hrSum, checkpoint.hrCount, checkpoint.hrMax)
+                )
+                markGpsRestored(checkpoint.startedAt)
+            }
             SessionRepository.restoreStandaloneSession(
                 activityType = checkpoint.activityType,
                 startedAt    = checkpoint.startedAt,
                 isPaused     = checkpoint.isPaused,
+                swim = if (isSwim) SwimData(
+                    location    = checkpoint.swimLocation ?: "POOL",
+                    poolLengthM = checkpoint.swimPoolLengthM,
+                ) else null,
             )
         } else {
             // Troppo vecchio per fingere sia "live": lo finalizziamo come
@@ -129,4 +153,9 @@ object TrackingEngine {
     /// la costante canonica vive in SessionViewModel (un solo posto).
     fun isGpsEligible(activityType: String): Boolean =
         activityType in SessionViewModel.GPS_ACTIVITY_TYPES
+
+    /// F5b — vero per swim_pool/swim_open_water: sensori posseduti da
+    /// [swimSource] (Health Services), mai da gpsTracker/workoutManager.
+    fun isSwimActivity(activityType: String): Boolean =
+        activityType == "swim_pool" || activityType == "swim_open_water"
 }

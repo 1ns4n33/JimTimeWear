@@ -42,6 +42,9 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.BODY_SENSORS,
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
+            // F5b (Nuoto) — ExerciseClient (HealthServicesExerciseSource)
+            // rifiuta startExercise senza questo permesso runtime.
+            Manifest.permission.ACTIVITY_RECOGNITION,
         ).apply {
             // API 33+: senza, il FGS di TrackingService parte comunque ma
             // la sua notifica/chip resta invisibile all'utente.
@@ -79,6 +82,9 @@ class MainActivity : ComponentActivity() {
             val pendingWaterMl   by viewModel.pendingWaterMl.collectAsStateWithLifecycle()
             val pendingWaterCount by viewModel.pendingWaterCount.collectAsStateWithLifecycle()
             val lastUsedType     by viewModel.lastUsedType.collectAsStateWithLifecycle()
+            val swimHeartRate    by viewModel.swimHeartRate.collectAsStateWithLifecycle()
+            val swimGuide        by viewModel.swimGuide.collectAsStateWithLifecycle()
+            val swimWorkouts     by viewModel.swimWorkouts.collectAsStateWithLifecycle()
 
             val navController = rememberSwipeDismissableNavController()
 
@@ -90,6 +96,20 @@ class MainActivity : ComponentActivity() {
                 val onCountdown = navController.currentDestination?.route
                     ?.startsWith("countdown/") == true
                 if (!onCountdown) navController.navigate("countdown/$type")
+            }
+
+            // F5b (Nuoto) — swim_pool/swim_open_water non passano dal
+            // 3‑2‑1 generico: prima serve la lunghezza vasca (SwimStartScreen).
+            // Stessa guardia "un solo flusso di avvio alla volta" di
+            // openCountdown, per il tap ripetuto sulla stessa attività
+            // dall'home (`lastUsedType`) o dal picker.
+            val openSwimStart: (String) -> Unit = { type ->
+                val onSwimStart = navController.currentDestination?.route
+                    ?.startsWith("swimStart/") == true
+                if (!onSwimStart) navController.navigate("swimStart/$type")
+            }
+            val onTapActivity: (String) -> Unit = { type ->
+                if (type == "swim_pool" || type == "swim_open_water") openSwimStart(type) else openCountdown(type)
             }
 
             SwipeDismissableNavHost(
@@ -112,7 +132,7 @@ class MainActivity : ComponentActivity() {
                                 phoneNeeded = !ok
                             }
                         },
-                        onQuickStart       = openCountdown,
+                        onQuickStart       = onTapActivity,
                         onOpenPicker       = { navController.navigate("pick") },
                         onOpenIntervals    = { navController.navigate("intervals") },
                         onAddWater         = { delta -> viewModel.addWater(delta) },
@@ -129,9 +149,24 @@ class MainActivity : ComponentActivity() {
                                 phoneNeeded = !ok
                             }
                         },
-                        onTapActivity = openCountdown,
+                        onTapActivity = onTapActivity,
                         showPhoneNeeded = phoneNeeded,
                         onRequestPlanDays = { viewModel.requestPlanDays() },
+                    )
+                }
+                composable(
+                    route = "swimStart/{type}",
+                    arguments = listOf(navArgument("type") { type = NavType.StringType }),
+                ) { backStackEntry ->
+                    val activityType = backStackEntry.arguments?.getString("type") ?: "swim_pool"
+                    SwimStartScreen(
+                        activityType = activityType,
+                        workouts = swimWorkouts,
+                        onConfirm = { poolLengthM, workout ->
+                            val location = if (activityType == "swim_open_water") "OPEN_WATER" else "POOL"
+                            viewModel.startSwimFromWatch(activityType, location, poolLengthM, workout)
+                        },
+                        onCancel = { navController.popBackStack() },
                     )
                 }
                 composable("intervals") {
@@ -165,6 +200,16 @@ class MainActivity : ComponentActivity() {
                             onStop        = viewModel::stopFromWatch,
                             onPause       = viewModel::pauseFromWatch,
                             onResume      = viewModel::resumeFromWatch,
+                        )
+                    } else if (sessionState.isSwim()) {
+                        SwimSessionScreen(
+                            sessionState = sessionState,
+                            heartRate    = swimHeartRate,
+                            guide        = swimGuide,
+                            onStop       = viewModel::stopFromWatch,
+                            onPause      = viewModel::pauseFromWatch,
+                            onResume     = viewModel::resumeFromWatch,
+                            onNextSet    = viewModel::nextSwimSet,
                         )
                     } else {
                         SessionScreen(

@@ -14,6 +14,10 @@ coreSplashscreen = "1.2.0"
 androidxCore = "1.13.1"
 lifecycle = "2.8.7"
 coroutines = "1.9.0"
+junit = "4.13.2"
+# F5b (Nuoto, Wear OS) — 1.1.0 è la più recente stabile (non alpha/beta/rc)
+# pubblicata su maven.google.com al 27/9/2026 per androidx.health:health-services-client.
+healthServicesClient = "1.1.0"
 
 [libraries]
 play-services-wearable  = { group = "com.google.android.gms", name = "play-services-wearable",  version.ref = "playServicesWearable" }
@@ -38,6 +42,8 @@ lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-
 lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "coroutines" }
+health-services-client = { group = "androidx.health", name = "health-services-client", version.ref = "healthServicesClient" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

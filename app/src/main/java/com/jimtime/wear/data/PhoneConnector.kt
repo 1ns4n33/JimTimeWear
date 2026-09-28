@@ -56,6 +56,13 @@ class PhoneConnector(private val context: Context) {
         avgHr: Double? = null,
         maxHr: Double? = null,
         syncId: String? = null,
+        // F5b (Nuoto) — nessun punto GPS per una sessione swim (routeless
+        // per definizione, come le altre sessionSync indoor): `distanceMeters`
+        // porta la distanza totale nel campo generico `distance` (letto da
+        // WatchActivityPayload.parse per il totale dell'attività), `swim` è
+        // il satellite (mirror SwimSessionDto) letto da SwimSummary.fromWire.
+        distanceMeters: Double? = null,
+        swim: JSONObject? = null,
     ): Boolean {
         return try {
             val nodes = nodeClient.connectedNodes.await()
@@ -90,6 +97,8 @@ class PhoneConnector(private val context: Context) {
                 if (avgHr != null) put("avgHr", avgHr)
                 if (maxHr != null) put("maxHr", maxHr)
                 if (syncId != null) put("syncId", syncId)
+                if (distanceMeters != null) put("distance", distanceMeters)
+                if (swim != null) put("swim", swim)
             }.toString().toByteArray()
 
             nodes.forEach { node ->

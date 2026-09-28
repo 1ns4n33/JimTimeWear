@@ -28,6 +28,12 @@ import com.jimtime.wear.data.PlanDay
 import com.jimtime.wear.data.PlanDaysStore
 import com.jimtime.wear.data.SessionRepository
 import com.jimtime.wear.data.SessionState
+import com.jimtime.wear.data.SwimData
+import com.jimtime.wear.data.SwimWorkoutWire
+import com.jimtime.wear.data.SwimWorkoutsStore
+import com.jimtime.wear.health.SwimGuideRep
+import com.jimtime.wear.health.SwimGuideRepository
+import com.jimtime.wear.health.SwimPayloadBuilder
 import com.jimtime.wear.health.TrackingEngine
 import com.jimtime.wear.health.TrackingService
 import kotlinx.coroutines.Job
@@ -56,6 +62,20 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     val heartRate: StateFlow<Double> = TrackingEngine.workoutManager.heartRate
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0.0)
+
+    /// F5b — HR di una sessione swim viene da [TrackingEngine.swimSource]
+    /// (ExerciseClient), MAI da workoutManager (SensorManager grezzo, non
+    /// avviato durante lo swim — vedi TrackingService.observeSwim). Prima
+    /// di questo la FC non compariva mai sulla schermata attiva del nuoto.
+    val swimHeartRate: StateFlow<Double> = TrackingEngine.swimSource.metrics
+        .map { it.heartRate }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0.0)
+
+    val swimGuide: StateFlow<SwimGuideRep?> = SwimGuideRepository.current
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val swimWorkouts: StateFlow<List<SwimWorkoutWire>> = SwimWorkoutsStore.workouts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val planDays: StateFlow<List<PlanDay>> = PlanDaysStore.days
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -99,6 +119,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         PlanDaysStore.load(application)
+        SwimWorkoutsStore.load(application)
         DailySummaryStore.load(application)
         WaterQueueStore.load(application)
         // Sync intervalli rimasto in outbox da una sessione chiusa offline.
@@ -214,9 +235,46 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /// F5b (Nuoto, §7) — avvio da SwimStartScreen. A differenza di
+    /// [startFromWatch], NON controlla la raggiungibilità del telefono: il
+    /// nuoto è sempre posseduto da [TrackingEngine.swimSource]
+    /// (ExerciseClient) — anche se il telefono è a bordo vasca e
+    /// raggiungibile, non ha modo di misurare vasche/bracciate al posto
+    /// dell'orologio.
+    fun startSwimFromWatch(
+        activityType: String,
+        location: String,
+        poolLengthM: Double?,
+        workout: SwimWorkoutWire? = null,
+    ) {
+        if (SessionRepository.state.value.isActive) return
+        persistLastUsedType(activityType)
+        viewModelScope.launch {
+            SessionRepository.startStandaloneSession(
+                activityType,
+                swim = SwimData(location = location, poolLengthM = poolLengthM, workout = workout),
+            )
+            ContextCompat.startForegroundService(
+                getApplication(),
+                Intent(getApplication(), TrackingService::class.java),
+            )
+        }
+    }
+
+    /// F5b (§7) — "prossima serie" manuale (rotella/tap sull'attiva): mai
+    /// bloccata dall'assenza di un `sendOffSec` sulla serie corrente, anzi
+    /// è l'UNICO modo di avanzare quando quel campo manca (D4).
+    fun nextSwimSet() {
+        SwimGuideRepository.manualNext(System.currentTimeMillis())
+    }
+
     fun stopFromWatch() {
         viewModelScope.launch {
             val state = SessionRepository.state.value
+            if (state.isSwim() && state.isStandalone && state.kind == SessionKind.ACTIVITY) {
+                stopSwimFromWatch(state)
+                return@launch
+            }
             if (state.isStandalone && state.kind == SessionKind.ACTIVITY) {
                 val points  = TrackingEngine.gpsTracker.points.value
                 val endedAt = System.currentTimeMillis()
@@ -259,6 +317,63 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 SessionRepository.stopSession()
             }
         }
+    }
+
+    /// F5b (Nuoto, D2/§7) — stop di una sessione swim: nessun punto GPS
+    /// (routeless per definizione), gli aggregati vengono da
+    /// [TrackingEngine.swimSource], letti in modo sincrono PRIMA di
+    /// fermare l'exercise/flippare lo stato — stesso ordine "persisti
+    /// prima di tutto" di [stopFromWatch] per sopravvivere a un crash qui.
+    private suspend fun stopSwimFromWatch(state: SessionState) {
+        val metrics = TrackingEngine.swimSource.metrics.value
+        val avgHr = TrackingEngine.swimSource.hrAverage
+        val maxHr = TrackingEngine.swimSource.hrMaxOrNull
+        val endedAt = System.currentTimeMillis()
+        val syncId = UUID.randomUUID().toString()
+        val swim = state.swim ?: SwimData()
+
+        // Mirror SwimSessionDto (D2): `laps: []` — Health Services espone
+        // solo il conteggio cumulativo (D9, stesso fallback "vasche/serie
+        // sconosciute" di un import senza marker riconosciuti), MAI vasche
+        // individuali inventate. `lapCount`/`distanceM` extra sono per
+        // diagnostica: SwimSummary.fromWire (lato phone) li ignora, non fa
+        // fallire il parse di un campo che non conosce.
+        val swimJson = JSONObject(
+            SwimPayloadBuilder.build(
+                location       = swim.location,
+                poolLengthM    = swim.poolLengthM,
+                distanceMeters = metrics.distanceMeters,
+                laps           = metrics.laps,
+                strokes        = metrics.strokes,
+            )
+        )
+
+        PendingRouteStore.save(
+            getApplication(),
+            PendingRouteStore.PendingRoute(
+                points         = emptyList(),
+                activityType   = state.activityType,
+                startedAt      = state.startedAt,
+                endedAt        = endedAt,
+                avgHr          = avgHr,
+                maxHr          = maxHr,
+                syncId         = syncId,
+                swimJson       = swimJson.toString(),
+                distanceMeters = metrics.distanceMeters,
+            ),
+        )
+        SessionRepository.stopSession()
+        ActiveSessionStore.clear(getApplication())
+        getApplication<Application>().stopService(
+            Intent(getApplication(), TrackingService::class.java)
+        )
+
+        trySendRoute(
+            emptyList(), state.activityType, state.startedAt, endedAt, avgHr, maxHr, syncId,
+            distanceMeters = metrics.distanceMeters,
+            swimJson = swimJson.toString(),
+        )
+        startPendingRouteRetry()
     }
 
     fun pauseFromWatch() {
@@ -455,6 +570,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                         pending.avgHr,
                         pending.maxHr,
                         pending.syncId,
+                        distanceMeters = pending.distanceMeters,
+                        swimJson = pending.swimJson,
                     )
                     if (sent && pending.syncId == null) {
                         // Entry legacy (scritta da una build precedente
@@ -485,10 +602,14 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         avgHr: Double? = null,
         maxHr: Double? = null,
         syncId: String? = null,
+        distanceMeters: Double? = null,
+        swimJson: String? = null,
     ): Boolean {
         if (!phoneConnector.isPhoneReachable()) return false
         return phoneConnector.sendRouteToPhone(
             points, activityType, startedAt, endedAt, avgHr, maxHr, syncId,
+            distanceMeters = distanceMeters,
+            swim = swimJson?.let { runCatching { JSONObject(it) }.getOrNull() },
         )
     }
 

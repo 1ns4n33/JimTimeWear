@@ -58,6 +58,10 @@ object JTColors {
         "pilates"        to Color(0xFFE0559B),
         "yoga"           to Color(0xFF9C6BFF),
         "stretching"     to Color(0xFF00B8D9),
+        // F5b (Nuoto) — stesso ciano di [water] (card Acqua): coerenza
+        // cromatica "attività in acqua" nel resto dell'app.
+        "swim_pool"       to Color(0xFF38BDF8),
+        "swim_open_water" to Color(0xFF38BDF8),
     )
 
     /** Per-activity accent color; falls back to the brand violet. */

@@ -67,6 +67,22 @@ dependencies {
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.play.services)
+    // F5b (Nuoto, Wear OS) — ExerciseClient: unica sorgente HR/distanza/
+    // vasche/bracciate per swim_pool/swim_open_water (GPS+SensorManager,
+    // usati da tutte le altre attività, non funzionano/non bastano in acqua).
+    implementation(libs.health.services.client)
+    // health-services-client dichiara guava/concurrent-futures-ktx come
+    // dipendenze "runtime" nel suo POM (non "api"): il tipo ListenableFuture
+    // che le sue API pubbliche restituiscono (startExerciseAsync, ecc.) non
+    // è altrimenti risolvibile a compile-time da questo modulo. Versioni
+    // allineate a quelle che health-services-client:1.1.0 già porta.
+    implementation("com.google.guava:guava:32.0.1-android")
+    implementation("androidx.concurrent:concurrent-futures-ktx:1.1.0")
+    testImplementation(libs.junit)
+    // Pure-JVM org.json for unit tests (the Android SDK's org.json stub
+    // used at compile time throws at runtime off-device) — verifies the
+    // swim wire payload round-trips through real JSON, not just a Map.
+    testImplementation("org.json:json:20231013")
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.ui.test.junit4)
     debugImplementation(libs.ui.tooling)

@@ -1,7 +1,11 @@
 package com.jimtime.wear.data
 
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
+import com.jimtime.wear.health.TrackingService
+import org.json.JSONArray
 import org.json.JSONObject
 
 class PhoneMessageService : WearableListenerService() {
@@ -32,7 +36,32 @@ class PhoneMessageService : WearableListenerService() {
             MessagePaths.CMD_START_SESSION -> {
                 val type = json.optString("type", "run")
                 val startedAt = json.optLong("startedAt", System.currentTimeMillis())
-                SessionRepository.startSession(type, startedAt)
+                // F5b (Nuoto, D4/§7) — `{location, poolLengthM?}` quando
+                // l'atleta ha avviato la sessione dal TELEFONO prima di
+                // entrare in acqua. Anche in questo caso sott'acqua i
+                // sensori restano SEMPRE del polso (SessionRepository.
+                // startSession marca isStandalone=true quando swim != null,
+                // vedi TrackingEngine invariant) — qui va solo AVVIATO
+                // TrackingService, che il percorso "phone raggiungibile"
+                // normalmente non tocca.
+                val swimObj = json.optJSONObject("swim")
+                val swim = swimObj?.let {
+                    SwimData(
+                        location    = it.optString("location", if (type == "swim_open_water") "OPEN_WATER" else "POOL"),
+                        poolLengthM = if (it.has("poolLengthM")) it.optDouble("poolLengthM") else null,
+                        // F5b (§7) — `startSession.swim.workout` (mirror
+                        // `SwimWorkoutRecord.toWire()`): l'atleta ha scelto
+                        // una serie del coach dal telefono prima di partire.
+                        workout = it.optJSONObject("workout")?.let(SwimWorkoutWire::fromWire),
+                    )
+                }
+                SessionRepository.startSession(type, startedAt, swim)
+                if (swim != null) {
+                    ContextCompat.startForegroundService(
+                        applicationContext,
+                        Intent(applicationContext, TrackingService::class.java),
+                    )
+                }
             }
             MessagePaths.CMD_STOP_SESSION  -> SessionRepository.stopSession()
             MessagePaths.CMD_PAUSE_SESSION -> SessionRepository.pauseSession()
@@ -40,6 +69,16 @@ class PhoneMessageService : WearableListenerService() {
             MessagePaths.CMD_PLAN_DAYS -> {
                 val days = json.optJSONArray("days") ?: return
                 PlanDaysStore.apply(applicationContext, json.optString("planName"), days)
+            }
+            // F5b (Nuoto, §7) — `WearableBridge.sendSwimWorkouts` inoltra
+            // verbatim su questo stesso path, come planDays/intervalConfig
+            // (vedi commento lì) — MAI più applicationContext: qui è un
+            // messaggio, quindi arriva solo se il polso è raggiungibile al
+            // momento del push; la cache locale (SwimWorkoutsStore) è
+            // quello che copre il resto del tempo.
+            MessagePaths.CMD_SWIM_WORKOUTS -> {
+                val items = json.optJSONArray("items") ?: JSONArray()
+                SwimWorkoutsStore.apply(applicationContext, items)
             }
             MessagePaths.CMD_SYNC_ACK -> handleSyncAck(json)
             MessagePaths.CMD_DAILY_SUMMARY -> handleDailySummary(json)

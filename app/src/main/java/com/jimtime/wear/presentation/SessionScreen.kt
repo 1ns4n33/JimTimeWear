@@ -213,7 +213,7 @@ internal fun TinyLabel(text: String) {
 
 /** Icon-in-colored-circle + value + tiny unit label. */
 @Composable
-private fun StatCell(icon: String, tint: Color, label: String, value: String) {
+internal fun StatCell(icon: String, tint: Color, label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier

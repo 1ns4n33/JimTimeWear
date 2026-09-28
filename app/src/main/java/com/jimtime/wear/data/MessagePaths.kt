@@ -41,6 +41,10 @@ object MessagePaths {
     const val CMD_START_PLAN_DAY    = "startPlanDay"
     const val CMD_REQUEST_PLAN_DAYS = "requestPlanDays"
 
+    // F5b (Nuoto, §7) — serie del coach (proprie + assegnate, ≤10/≤40),
+    // forwarded verbatim dal telefono come planDays/intervalConfig.
+    const val CMD_SWIM_WORKOUTS = "swimWorkouts"
+
     // Standalone session delivery at reconnection: with GPS points =
     // routeSync, without (indoor on the wrist) = sessionSync.
     const val CMD_ROUTE_SYNC   = "routeSync"

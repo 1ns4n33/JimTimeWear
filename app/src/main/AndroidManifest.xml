@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.BODY_SENSORS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- F5b (Nuoto) — TrackingService dichiara ANCHE il tipo "health" quando
+         la sessione attiva è swim_pool/swim_open_water (ExerciseClient, non
+         GPS/SensorManager): serve sia il permesso runtime sia il tipo FGS. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -56,11 +61,14 @@
         </service>
 
         <!-- Foreground service: sensori/GPS di una sessione ACTIVITY
-             standalone, sopravvive a schermo spento/Doze per ore. -->
+             standalone, sopravvive a schermo spento/Doze per ore.
+             F5b: "health" aggiunto per le sessioni swim (ExerciseClient) —
+             "location" resta dichiarato per tutte le altre e per il GPS
+             di swim_open_water. -->
         <service
             android:name=".health.TrackingService"
             android:exported="false"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location|health" />
 
     </application>
 

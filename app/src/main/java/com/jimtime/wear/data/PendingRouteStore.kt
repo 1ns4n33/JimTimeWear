@@ -43,6 +43,14 @@ object PendingRouteStore {
         // il phone non manderà mai un ack per questa entry, vedi
         // SessionViewModel.startPendingRouteRetry).
         val syncId: String? = null,
+        // F5b (Nuoto) — blocco `swim` (mirror SwimSessionDto) serializzato,
+        // null per ogni sessione non-swim. Il retry (startPendingRouteRetry)
+        // lo ri-attacca invariato ad ogni tentativo di invio.
+        val swimJson: String? = null,
+        // Distanza totale (campo generico `distance` del wire, letto da
+        // WatchActivityPayload anche senza punti GPS) — solo per sessioni
+        // routeless come lo swim; null altrove (i punti bastano).
+        val distanceMeters: Double? = null,
     )
 
     /// Accoda una nuova route in attesa di sync — MAI overwrite: due
@@ -119,6 +127,8 @@ object PendingRouteStore {
             if (route.avgHr != null) put("avgHr", route.avgHr)
             if (route.maxHr != null) put("maxHr", route.maxHr)
             if (route.syncId != null) put("syncId", route.syncId)
+            if (route.swimJson != null) put("swim", JSONObject(route.swimJson))
+            if (route.distanceMeters != null) put("distanceMeters", route.distanceMeters)
         }
     }
 
@@ -144,6 +154,8 @@ object PendingRouteStore {
                 avgHr        = if (o.has("avgHr")) o.optDouble("avgHr") else null,
                 maxHr        = if (o.has("maxHr")) o.optDouble("maxHr") else null,
                 syncId       = if (o.has("syncId")) o.optString("syncId") else null,
+                swimJson     = o.optJSONObject("swim")?.toString(),
+                distanceMeters = if (o.has("distanceMeters")) o.optDouble("distanceMeters") else null,
             )
         }.getOrNull()
     }

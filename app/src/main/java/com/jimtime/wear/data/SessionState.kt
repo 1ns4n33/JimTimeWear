@@ -40,6 +40,24 @@ data class WorkoutContext(
     val completedExercises: Int = 0,
 )
 
+/// F5b (Nuoto, D2/D12) — aggregati correnti di una sessione swim, popolati
+/// da [com.jimtime.wear.health.HealthServicesExerciseSource] via
+/// `SessionRepository.updateSwimMetrics`. `location`/`poolLengthM` sono
+/// fissati all'avvio (SwimStartScreen) e non cambiano più durante la
+/// sessione.
+data class SwimData(
+    val location: String = "POOL", // "POOL" | "OPEN_WATER" — mirror SwimSessionDto
+    val poolLengthM: Double? = null,
+    val distanceMeters: Double = 0.0,
+    val laps: Int = 0,
+    val strokes: Int = 0,
+    /// F5b (§7) — allenamento del coach seguito in questa sessione, se
+    /// scelto su SwimStartScreen o arrivato via `startSession.swim.workout`
+    /// dal telefono. `null` = nessuna guida, SwimSessionScreen mostra solo
+    /// gli aggregati.
+    val workout: SwimWorkoutWire? = null,
+)
+
 data class SessionState(
     val isActive: Boolean = false,
     val isPaused: Boolean = false,
@@ -51,6 +69,8 @@ data class SessionState(
     // ── Workout extension ───────────────────────────────────────────────
     val kind: SessionKind = SessionKind.ACTIVITY,
     val workout: WorkoutContext? = null,
+    // ── F5b Swim extension ───────────────────────────────────────────────
+    val swim: SwimData? = null,
 ) {
     val paceSecondsPerKm: Double
         get() = if (distanceMeters > 100 && elapsedSeconds > 0)
@@ -76,24 +96,20 @@ data class SessionState(
         return "%d:%02d/km".format(m, s)
     }
 
-    fun activityIcon(): String = when (activityType) {
-        "run", "treadmill_run"   -> "🏃"
-        "walk", "treadmill_walk" -> "🚶"
-        "bike", "indoor_cycling" -> "🚴"
-        "hike"                   -> "🥾"
-        "trail"                  -> "🌲"
-        "skate"                  -> "🛼"
-        "mtb"                    -> "🚵"
-        "meditation"             -> "🧘"
-        "pilates", "yoga"        -> "🤸"
-        "stretching"             -> "🙆"
-        else                     -> "🏋️"
-    }
+    /// F0: emoji dal catalogo sport unico (`data.SportsCatalog`, generato da
+    /// tool/sports_catalog.json nel repo Flutter) — prima una quarta copia a
+    /// mano dello stesso elenco. Nota: "skate" era 🛼 qui contro ⛸ nel
+    /// catalogo/telefono/Apple Watch — allineato a ⛸ (l'emoji condivisa).
+    fun activityIcon(): String = SportsCatalog.emoji(activityType)
 
-    fun isIndoor(): Boolean = activityType in setOf(
-        "treadmill_walk", "treadmill_run", "indoor_cycling",
-        "meditation", "pilates", "yoga", "stretching",
-    )
+    fun isIndoor(): Boolean = SportsCatalog.isIndoor(activityType)
 
     fun isWorkout(): Boolean = kind == SessionKind.WORKOUT
+
+    fun isSwim(): Boolean = activityType == "swim_pool" || activityType == "swim_open_water"
+
+    fun formattedSwimDistance(): String {
+        val m = swim?.distanceMeters ?: 0.0
+        return if (m >= 1000) "%.2f km".format(m / 1000.0) else "%.0f m".format(m)
+    }
 }

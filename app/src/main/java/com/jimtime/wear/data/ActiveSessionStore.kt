@@ -24,6 +24,11 @@ object ActiveSessionStore {
     private const val KEY_HR_SUM     = "hrSum"
     private const val KEY_HR_COUNT   = "hrCount"
     private const val KEY_HR_MAX     = "hrMax"
+    // F5b (Nuoto) — config fissata all'avvio, serve a ricostruire la
+    // ExerciseConfig se il processo muore durante una sessione swim.
+    // Assente per ogni altra attività (chiavi opzionali, retro-compatibile).
+    private const val KEY_SWIM_LOCATION    = "swimLocation"
+    private const val KEY_SWIM_POOL_LENGTH = "swimPoolLengthM"
 
     data class Checkpoint(
         val activityType: String,
@@ -34,6 +39,8 @@ object ActiveSessionStore {
         val hrSum: Double,
         val hrCount: Int,
         val hrMax: Double,
+        val swimLocation: String? = null,
+        val swimPoolLengthM: Double? = null,
     )
 
     fun save(context: Context, checkpoint: Checkpoint) {
@@ -47,7 +54,7 @@ object ActiveSessionStore {
                 put("ts",  p.timestampMs)
             })
         }
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putString(KEY_POINTS, arr.toString())
             .putString(KEY_TYPE, checkpoint.activityType)
             .putLong(KEY_STARTED, checkpoint.startedAt)
@@ -56,7 +63,9 @@ object ActiveSessionStore {
             .putFloat(KEY_HR_SUM, checkpoint.hrSum.toFloat())
             .putInt(KEY_HR_COUNT, checkpoint.hrCount)
             .putFloat(KEY_HR_MAX, checkpoint.hrMax.toFloat())
-            .apply()
+        if (checkpoint.swimLocation != null) editor.putString(KEY_SWIM_LOCATION, checkpoint.swimLocation)
+        if (checkpoint.swimPoolLengthM != null) editor.putFloat(KEY_SWIM_POOL_LENGTH, checkpoint.swimPoolLengthM.toFloat())
+        editor.apply()
     }
 
     fun load(context: Context): Checkpoint? {
@@ -87,6 +96,8 @@ object ActiveSessionStore {
                 hrSum        = prefs.getFloat(KEY_HR_SUM, 0f).toDouble(),
                 hrCount      = prefs.getInt(KEY_HR_COUNT, 0),
                 hrMax        = prefs.getFloat(KEY_HR_MAX, 0f).toDouble(),
+                swimLocation = if (prefs.contains(KEY_SWIM_LOCATION)) prefs.getString(KEY_SWIM_LOCATION, null) else null,
+                swimPoolLengthM = if (prefs.contains(KEY_SWIM_POOL_LENGTH)) prefs.getFloat(KEY_SWIM_POOL_LENGTH, 0f).toDouble() else null,
             )
         }.getOrNull()
     }
