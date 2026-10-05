@@ -29,6 +29,17 @@ object ActiveSessionStore {
     // Assente per ogni altra attività (chiavi opzionali, retro-compatibile).
     private const val KEY_SWIM_LOCATION    = "swimLocation"
     private const val KEY_SWIM_POOL_LENGTH = "swimPoolLengthM"
+    // F7 (D18, appendice I) — snapshot della corsa guidata
+    // `{structure, engine, segments, planRef, lang, title, sport, variant}`
+    // (GuidedRunSnapshot.toJson) e `plan` di una sessione da piano non
+    // guidata. Assenti per ogni altra sessione (retro-compatibile).
+    private const val KEY_GUIDED = "guidedJson"
+    private const val KEY_PLAN   = "planJson"
+    // F7 (correzioni) — tempo ATTIVO (pause escluse) all'istante del
+    // salvataggio; `lastUpdateMs` è l'istante wall-clock dello stesso
+    // salvataggio e `isPaused` lo stato di pausa. Assente nei checkpoint
+    // pre-F7 ⇒ il recovery ricade su now - startedAt.
+    private const val KEY_ACTIVE_MS = "activeMs"
 
     data class Checkpoint(
         val activityType: String,
@@ -41,6 +52,9 @@ object ActiveSessionStore {
         val hrMax: Double,
         val swimLocation: String? = null,
         val swimPoolLengthM: Double? = null,
+        val guidedJson: String? = null,
+        val planJson: String? = null,
+        val activeMs: Long? = null,
     )
 
     fun save(context: Context, checkpoint: Checkpoint) {
@@ -65,6 +79,11 @@ object ActiveSessionStore {
             .putFloat(KEY_HR_MAX, checkpoint.hrMax.toFloat())
         if (checkpoint.swimLocation != null) editor.putString(KEY_SWIM_LOCATION, checkpoint.swimLocation)
         if (checkpoint.swimPoolLengthM != null) editor.putFloat(KEY_SWIM_POOL_LENGTH, checkpoint.swimPoolLengthM.toFloat())
+        // remove esplicito: un checkpoint senza guida non deve ereditare lo
+        // snapshot di una sessione precedente rimasto nelle prefs.
+        if (checkpoint.guidedJson != null) editor.putString(KEY_GUIDED, checkpoint.guidedJson) else editor.remove(KEY_GUIDED)
+        if (checkpoint.planJson != null) editor.putString(KEY_PLAN, checkpoint.planJson) else editor.remove(KEY_PLAN)
+        if (checkpoint.activeMs != null) editor.putLong(KEY_ACTIVE_MS, checkpoint.activeMs) else editor.remove(KEY_ACTIVE_MS)
         editor.apply()
     }
 
@@ -98,6 +117,9 @@ object ActiveSessionStore {
                 hrMax        = prefs.getFloat(KEY_HR_MAX, 0f).toDouble(),
                 swimLocation = if (prefs.contains(KEY_SWIM_LOCATION)) prefs.getString(KEY_SWIM_LOCATION, null) else null,
                 swimPoolLengthM = if (prefs.contains(KEY_SWIM_POOL_LENGTH)) prefs.getFloat(KEY_SWIM_POOL_LENGTH, 0f).toDouble() else null,
+                guidedJson = prefs.getString(KEY_GUIDED, null),
+                planJson = prefs.getString(KEY_PLAN, null),
+                activeMs = if (prefs.contains(KEY_ACTIVE_MS)) prefs.getLong(KEY_ACTIVE_MS, 0L) else null,
             )
         }.getOrNull()
     }

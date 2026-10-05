@@ -54,6 +54,18 @@ object MessagePaths {
     /// PendingRouteStore — un send riuscito a livello di trasporto NON
     /// basta (il phone potrebbe essere morto prima di scrivere su DB).
     const val CMD_SYNC_ACK = "syncAck"
+    /// Phone → watch: la routeSync/sessionSync è stata RICEVUTA ma NON
+    /// salvata (non loggato, sessione già aperta sul telefono, salvataggio
+    /// fallito, payload illeggibile — `reason` porta il motivo). A
+    /// differenza di CMD_SYNC_ACK l'item RESTA in coda: solo il motivo
+    /// mostrato cambia (PendingSyncCoordinator/PendingSyncStatusStore),
+    /// mirror di `syncStatus` in WatchConnectivity.swift lato iOS.
+    const val CMD_SYNC_STATUS = "syncStatus"
+    /// Phone → watch: rispedisci SUBITO tutta la coda pending-sync (dopo un
+    /// login, o al ritorno in foreground del telefono) — nessuno stato da
+    /// resuscitare, si limita a rilanciare gli invii come farebbe il retry
+    /// periodico.
+    const val CMD_REQUEST_PENDING_SYNC = "requestPendingSync"
     /// Sessione palestra/intervalli standalone dal polso → telefono.
     const val CMD_GYM_SESSION_SYNC = "gymSessionSync"
 
@@ -62,4 +74,40 @@ object MessagePaths {
     const val CMD_DAILY_SUMMARY         = "dailySummary"
     const val CMD_REQUEST_DAILY_SUMMARY = "requestDailySummary"
     const val CMD_WATER_DELTA           = "waterDelta"
+
+    // F7 (Schede multisport al polso, §2.1–2.5) — capacità, avvio guidato
+    // dal telefono, mirror della corsa guidata al polso, striscia fase del
+    // companion. Tutti message-only.
+    /// Watch → phone: annuncio di capacità (all'avvio e prima di ogni
+    /// requestPlanDays), `{platform, caps, appVersion, build}`.
+    const val CMD_WATCH_HELLO = "watchHello"
+    /// Phone → watch (companion F1): fase corrente guidata dal telefono.
+    const val CMD_GUIDED_STEP = "guidedStep"
+    /// Watch → phone: mirror di una corsa guidata/da piano posseduta dal polso.
+    const val CMD_PLAN_ACTIVITY_STARTED = "planActivityStarted"
+    const val CMD_GUIDED_STATE          = "guidedState"
+    const val CMD_PLAN_ACTIVITY_ENDED   = "planActivityEnded"
+    /// F7 (J17) — watch → phone: `startSession{wristAuthoritative}` scartato
+    /// da GuidedStartPolicy, `{platform, startedAt, reason}` con `reason` ∈
+    /// `liveSession|replay|stale`. Solo se raggiungibile, senza retry.
+    const val CMD_PLAN_ACTIVITY_START_IGNORED = "planActivityStartIgnored"
+
+    /// `startSession{wristAuthoritative:true}` = il polso possiede la
+    /// sessione (TrackingService + motore), il telefono fa solo mirror.
+    const val KEY_WRIST_AUTHORITATIVE = "wristAuthoritative"
+    const val KEY_GUIDED = "guided"
+    const val KEY_PLAN   = "plan"
+
+    const val PLATFORM_WEAR = "wear"
+    val WATCH_CAPS = listOf("guidedRunV1", "sportDaysV1", "guidedMultiV1")
+
+    /// Extra dell'Intent che apre MainActivity da PhoneMessageService (avvio
+    /// dal telefono) o dal chip OngoingActivity: MainActivity naviga alla
+    /// rotta `session` se c'è una sessione attiva (J12).
+    const val EXTRA_OPEN_SESSION = "jt_open_session"
+
+    /// Extra della notifica «Tocca per iniziare»: MainActivity, in primo
+    /// piano, consuma l'avvio dal telefono rimasto in sospeso perché la FGS
+    /// da background era stata negata (WristGuidedStart.consumePending).
+    const val EXTRA_PENDING_START = "jt_pending_start"
 }

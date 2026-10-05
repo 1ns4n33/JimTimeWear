@@ -1,11 +1,16 @@
 package com.jimtime.wear.health
 
 import android.content.Context
+import com.jimtime.wear.data.ActiveClock
 import com.jimtime.wear.data.ActiveSessionStore
+import com.jimtime.wear.data.GpsPoint
 import com.jimtime.wear.data.PendingRouteStore
 import com.jimtime.wear.data.SessionRepository
+import com.jimtime.wear.data.SportsCatalog
 import com.jimtime.wear.data.SwimData
-import com.jimtime.wear.presentation.SessionViewModel
+import com.jimtime.wear.guided.GuidedRunRepository
+import com.jimtime.wear.guided.GuidedRunSnapshot
+import org.json.JSONObject
 import java.util.UUID
 
 /**
@@ -114,6 +119,10 @@ object TrackingEngine {
                 )
                 markGpsRestored(checkpoint.startedAt)
             }
+            // F7 (D18) — motore a fasi dallo snapshot: `engine.started` ⇒
+            // nessuna frase/aptica di avvio ripetuta al primo tick.
+            val snapshot = guidedSnapshotOf(checkpoint)
+            if (snapshot != null) GuidedRunRepository.restore(snapshot)
             SessionRepository.restoreStandaloneSession(
                 activityType = checkpoint.activityType,
                 startedAt    = checkpoint.startedAt,
@@ -122,6 +131,21 @@ object TrackingEngine {
                     location    = checkpoint.swimLocation ?: "POOL",
                     poolLengthM = checkpoint.swimPoolLengthM,
                 ) else null,
+                planRefJson   = checkpoint.planJson ?: snapshot?.planRef?.toString(),
+                guided        = snapshot != null,
+                guidedVariant = snapshot?.variant,
+                // F7 (correzioni) — tempo attivo dal checkpoint, mai sotto
+                // quanto il motore guidato aveva già visto.
+                activeMs = checkpoint.activeMs?.let { saved ->
+                    ActiveClock.resumeActiveMs(
+                        savedActiveMs = saved,
+                        savedAtWallMs = checkpoint.lastUpdateMs,
+                        wasPaused = checkpoint.isPaused,
+                        nowWallMs = System.currentTimeMillis(),
+                        floorActiveMs = snapshot?.engine?.lastActiveMs ?: 0L,
+                    )
+                },
+                distanceMeters = if (isSwim) 0.0 else routeDistanceM(checkpoint.points),
             )
         } else {
             // Troppo vecchio per fingere sia "live": lo finalizziamo come
@@ -130,6 +154,10 @@ object TrackingEngine {
             // nulla. Il retry loop del SessionViewModel (già avviato al
             // suo init) lo raccoglie da PendingRouteStore appena parte.
             val endedAt = checkpoint.points.lastOrNull()?.timestampMs ?: checkpoint.lastUpdateMs
+            // F7 (D18) — `plan` + segmenti con la fase in corso chiusa
+            // `finish`, così l'attività arriva comunque agganciata al piano.
+            val snapshot = guidedSnapshotOf(checkpoint)
+            val stepSegments = snapshot?.let { GuidedRunRepository.closedRecord(it) }
             PendingRouteStore.save(
                 context,
                 PendingRouteStore.PendingRoute(
@@ -140,6 +168,8 @@ object TrackingEngine {
                     avgHr        = if (checkpoint.hrCount > 0) checkpoint.hrSum / checkpoint.hrCount else null,
                     maxHr        = if (checkpoint.hrMax > 0) checkpoint.hrMax else null,
                     syncId       = UUID.randomUUID().toString(),
+                    planJson     = checkpoint.planJson ?: snapshot?.planRef?.toString(),
+                    stepSegmentsJson = stepSegments?.toString(),
                 ),
             )
             ActiveSessionStore.clear(context)
@@ -147,12 +177,35 @@ object TrackingEngine {
         }
     }
 
-    /// Vero per activityType tracciabili via GPS quando standalone —
-    /// stessi id offerti da IdleScreen per le attività "outdoor". Esposto
-    /// qui perché sia TrackingService sia questo motore ne hanno bisogno;
-    /// la costante canonica vive in SessionViewModel (un solo posto).
+    private fun guidedSnapshotOf(checkpoint: ActiveSessionStore.Checkpoint): GuidedRunSnapshot? =
+        checkpoint.guidedJson?.let { raw ->
+            runCatching { GuidedRunSnapshot.fromJson(JSONObject(raw)) }.getOrNull()
+        }
+
+    /// Distanza totale di una rotta (somma haversine), in metri.
+    fun routeDistanceM(points: List<GpsPoint>): Double {
+        var total = 0.0
+        for (i in 1 until points.size) total += haversineM(points[i - 1], points[i])
+        return total
+    }
+
+    /// F7 (D22) — distanza haversine fra due fix, in metri. Usata dal
+    /// ticker di TrackingService (incrementale) e dalla VM (companion).
+    fun haversineM(a: GpsPoint, b: GpsPoint): Double {
+        val dLat = Math.toRadians(b.lat - a.lat)
+        val dLng = Math.toRadians(b.lng - a.lng)
+        val h = Math.sin(dLat / 2).let { it * it } +
+            Math.cos(Math.toRadians(a.lat)) *
+            Math.cos(Math.toRadians(b.lat)) *
+            Math.sin(dLng / 2).let { it * it }
+        return 2 * 6371000.0 * Math.asin(Math.sqrt(h))
+    }
+
+    /// Vero per activityType tracciabili via GPS quando standalone. F7
+    /// (D22): dal catalogo generato (`watchWear && outdoorGps`), non più
+    /// un elenco a mano — mtb/skate ora inclusi.
     fun isGpsEligible(activityType: String): Boolean =
-        activityType in SessionViewModel.GPS_ACTIVITY_TYPES
+        activityType in SportsCatalog.watchOutdoorIds
 
     /// F5b — vero per swim_pool/swim_open_water: sensori posseduti da
     /// [swimSource] (Health Services), mai da gpsTracker/workoutManager.

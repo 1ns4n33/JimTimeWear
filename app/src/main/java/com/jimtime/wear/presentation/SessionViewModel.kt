@@ -13,6 +13,8 @@ import com.jimtime.wear.data.GpsPoint
 import com.jimtime.wear.data.IntervalSpec
 import com.jimtime.wear.data.MessagePaths
 import com.jimtime.wear.data.PendingGymStore
+import com.jimtime.wear.data.PendingSyncCoordinator
+import com.jimtime.wear.data.PendingSyncStatusStore
 import com.jimtime.wear.data.SessionKind
 import com.jimtime.wear.data.WaterDelta
 import com.jimtime.wear.data.WaterQueueStore
@@ -31,6 +33,12 @@ import com.jimtime.wear.data.SessionState
 import com.jimtime.wear.data.SwimData
 import com.jimtime.wear.data.SwimWorkoutWire
 import com.jimtime.wear.data.SwimWorkoutsStore
+import com.jimtime.wear.data.SportActivity
+import com.jimtime.wear.data.SportDay
+import com.jimtime.wear.data.SportsCatalog
+import com.jimtime.wear.guided.GuidedRunRepository
+import com.jimtime.wear.guided.GuidedRunView
+import com.jimtime.wear.guided.ResolvedStructure
 import com.jimtime.wear.health.SwimGuideRep
 import com.jimtime.wear.health.SwimGuideRepository
 import com.jimtime.wear.health.SwimPayloadBuilder
@@ -42,9 +50,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class SessionViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -83,6 +93,14 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     val planName: StateFlow<String> = PlanDaysStore.planName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 
+    /// F7 (§2.2) — giorni di piano con attività sport avviabili dal polso.
+    val sportDays: StateFlow<List<SportDay>> = PlanDaysStore.sportDays
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /// F7 (§2.9) — stato della corsa guidata al polso, `null` se nessuna.
+    val guidedRun: StateFlow<GuidedRunView?> = GuidedRunRepository.current
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     val dailySummary: StateFlow<DailySummary?> = DailySummaryStore.summary
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
@@ -108,6 +126,38 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
+    /// Stato UI di un item della schermata "Da sincronizzare" — mirror di
+    /// `PendingSyncItem.Status` in WatchConnectivity.swift lato iOS.
+    sealed class PendingSyncStatus {
+        object None : PendingSyncStatus()
+        object Sending : PendingSyncStatus()
+        data class Reason(val reason: String) : PendingSyncStatus()
+    }
+
+    data class PendingSyncItem(
+        val route: PendingRouteStore.PendingRoute,
+        val status: PendingSyncStatus,
+    )
+
+    /// Coda [PendingRouteStore] + motivo persistito + "in invio" transiente,
+    /// combinati in un'unica lista pronta per PendingSyncScreen — nessuno
+    /// dei tre store sa degli altri due, la combinazione vive solo qui.
+    val pendingSyncItems: StateFlow<List<PendingSyncItem>> = combine(
+        PendingRouteStore.routes,
+        PendingSyncStatusStore.statuses,
+        PendingSyncCoordinator.sendingIds,
+    ) { routes, statuses, sending ->
+        routes.map { route ->
+            val id = route.syncId
+            val status = when {
+                id != null && sending.contains(id) -> PendingSyncStatus.Sending
+                id != null && statuses.containsKey(id) -> PendingSyncStatus.Reason(statuses.getValue(id))
+                else -> PendingSyncStatus.None
+            }
+            PendingSyncItem(route, status)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private val prefs = application.getSharedPreferences("jimtime_prefs", Context.MODE_PRIVATE)
 
     private val _lastUsedType = MutableStateFlow(prefs.getString(KEY_LAST_USED_TYPE, null))
@@ -122,6 +172,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         SwimWorkoutsStore.load(application)
         DailySummaryStore.load(application)
         WaterQueueStore.load(application)
+        PendingRouteStore.refresh(application)
+        PendingSyncStatusStore.load(application)
         // Sync intervalli rimasto in outbox da una sessione chiusa offline.
         viewModelScope.launch {
             PendingGymStore.load(application)?.let { pending ->
@@ -135,7 +187,10 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
         // Wear messages aren't cached phone-side: ask for a fresh plan
         // list in case a push happened while we were disconnected.
+        // F7 (§2.1) — watchHello PRIMA: il telefono decide da queste cap se
+        // mandare `sportDays` nella risposta.
         viewModelScope.launch {
+            phoneConnector.sendHello()
             phoneConnector.sendToPhone(MessagePaths.CMD_REQUEST_PLAN_DAYS)
         }
         requestDailySummary()
@@ -194,9 +249,13 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        // Keep distance in sync with GPS tracker
+        // Keep distance in sync with GPS tracker — F7 (D22): SOLO per le
+        // sessioni non standalone; quelle standalone ACTIVITY le aggiorna
+        // TrackingService (incrementale), anche a VM distrutta.
         viewModelScope.launch {
             TrackingEngine.gpsTracker.points.collect { points ->
+                val st = SessionRepository.state.value
+                if (st.isStandalone && st.kind == SessionKind.ACTIVITY) return@collect
                 val meters = computeDistance(points)
                 SessionRepository.updateDistance(meters)
             }
@@ -233,6 +292,70 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 )
             }
         }
+    }
+
+    /// F7 (D3, §2.2) — avvio di un'attività di piano dal polso: SEMPRE
+    /// standalone (TrackingService + motore al polso), anche col telefono
+    /// raggiungibile; guidata solo se `guided` e con una struttura valida,
+    /// altrimenti sessione semplice con il solo `plan`. Al telefono va
+    /// `planActivityStarted` (mirror, D23), mai `sessionStarted`.
+    fun startSportActivityFromWatch(activity: SportActivity) {
+        if (SessionRepository.state.value.isActive) return
+        persistLastUsedType(activity.sport)
+        viewModelScope.launch {
+            TrackingEngine.workoutManager.resetHrAccumulation()
+            val planRef = activity.planRef(PlanDaysStore.planId.value)
+            val structure = if (activity.guided) {
+                activity.structureJson
+                    ?.let { runCatching { ResolvedStructure.fromWire(JSONObject(it)) }.getOrNull() }
+                    ?.takeIf { !it.isEmpty }
+            } else null
+            val lang = PlanDaysStore.lang.value.ifEmpty { Locale.getDefault().language }
+            val startedAt = System.currentTimeMillis()
+            if (structure != null) {
+                GuidedRunRepository.start(
+                    structure = structure,
+                    planRef = planRef,
+                    lang = lang,
+                    title = activity.title,
+                    sport = activity.sport,
+                    variant = null, // D16: la ridotta non si sceglie dal polso.
+                    hasDistanceSignal = TrackingEngine.isGpsEligible(activity.sport),
+                    profile = activity.profileJson?.let { runCatching { JSONObject(it) }.getOrNull() },
+                )
+            }
+            val swim = when (activity.sport) {
+                "swim_pool" -> SwimData(location = "POOL")
+                "swim_open_water" -> SwimData(location = "OPEN_WATER")
+                else -> null
+            }
+            SessionRepository.startStandaloneSession(
+                activity.sport,
+                swim = swim,
+                planRefJson = planRef.toString(),
+                guided = structure != null,
+                startedAt = startedAt,
+            )
+            ContextCompat.startForegroundService(
+                getApplication(),
+                Intent(getApplication(), TrackingService::class.java),
+            )
+            val msg = JSONObject()
+                .put("cmd", MessagePaths.CMD_PLAN_ACTIVITY_STARTED)
+                .put("platform", MessagePaths.PLATFORM_WEAR)
+                .put(MessagePaths.KEY_PLAN, planRef)
+                .put("sport", activity.sport)
+                .put("startedAt", startedAt)
+                .put("guided", structure != null)
+            activity.title?.let { msg.put("title", it) }
+            phoneConnector.sendMirror(msg)
+        }
+    }
+
+    /// F7 — «Fase ›» della schermata guidata: chiude la fase in corso al
+    /// prossimo tick del service (lap).
+    fun nextStepFromWatch() {
+        GuidedRunRepository.nextStep()
     }
 
     /// F5b (Nuoto, §7) — avvio da SwimStartScreen. A differenza di
@@ -276,6 +399,13 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 return@launch
             }
             if (state.isStandalone && state.kind == SessionKind.ACTIVITY) {
+                // F7 (D10) — segmenti PRIMA di tutto (chiude la fase in
+                // corso con `finish`, poi ferma il motore): dopo stopSession
+                // il service pulirebbe il motore.
+                val stepSegments = if (GuidedRunRepository.isActive) {
+                    GuidedRunRepository.takeSegments(SessionRepository.activeMs() / 1000.0, state.distanceMeters)
+                } else null
+                val planJson = state.planRefJson
                 val points  = TrackingEngine.gpsTracker.points.value
                 val endedAt = System.currentTimeMillis()
                 // Capture BEFORE stopSession(): a stato inattivo
@@ -299,6 +429,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                         avgHr        = avgHr,
                         maxHr        = maxHr,
                         syncId       = syncId,
+                        planJson     = planJson,
+                        stepSegmentsJson = stepSegments?.toString(),
                     ),
                 )
                 SessionRepository.stopSession()
@@ -310,7 +442,12 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 // Tentativo immediato; la clear della store avviene SOLO al
                 // syncAck del telefono (PhoneMessageService) — mai su un
                 // semplice invio riuscito a livello di trasporto.
-                trySendRoute(points, state.activityType, state.startedAt, endedAt, avgHr, maxHr, syncId)
+                trySendRoute(
+                    points, state.activityType, state.startedAt, endedAt, avgHr, maxHr, syncId,
+                    planJson = planJson,
+                    stepSegmentsJson = stepSegments?.toString(),
+                )
+                sendPlanActivityEnded(state)
                 startPendingRouteRetry()
             } else {
                 phoneConnector.sendToPhone(MessagePaths.CMD_STOP_FROM_WATCH)
@@ -360,6 +497,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 syncId         = syncId,
                 swimJson       = swimJson.toString(),
                 distanceMeters = metrics.distanceMeters,
+                planJson       = state.planRefJson,
             ),
         )
         SessionRepository.stopSession()
@@ -372,8 +510,23 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             emptyList(), state.activityType, state.startedAt, endedAt, avgHr, maxHr, syncId,
             distanceMeters = metrics.distanceMeters,
             swimJson = swimJson.toString(),
+            planJson = state.planRefJson,
         )
+        sendPlanActivityEnded(state)
         startPendingRouteRetry()
+    }
+
+    /// F7 (D23) — chiude il mirror del telefono per una sessione da piano;
+    /// il record vero arriva via routeSync/sessionSync. Best-effort.
+    private suspend fun sendPlanActivityEnded(state: SessionState) {
+        if (state.planRefJson == null) return
+        phoneConnector.sendMirror(
+            JSONObject()
+                .put("cmd", MessagePaths.CMD_PLAN_ACTIVITY_ENDED)
+                .put("platform", MessagePaths.PLATFORM_WEAR)
+                .put("startedAt", state.startedAt)
+                .put("saved", true),
+        )
     }
 
     fun pauseFromWatch() {
@@ -543,8 +696,26 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     /// Chiamata da MainActivity.onResume — pull fresco del riepilogo +
     /// flush di eventuali delta rimasti in coda da prima del background.
     fun onForeground() {
+        viewModelScope.launch { phoneConnector.sendHello() }
         requestDailySummary()
         flushWaterQueue()
+    }
+
+    // ── "Da sincronizzare" (PendingSyncScreen) ──────────────────────────
+
+    /// Tap su una riga: reinvia SOLO quella route. Stesso percorso di
+    /// [sendAllPendingSync] (PendingSyncCoordinator.sendOne), così lo stato
+    /// "in invio"/motivo resta coerente ovunque parta un invio.
+    fun sendPendingSyncItem(syncId: String) {
+        val route = PendingRouteStore.loadAll(getApplication()).find { it.syncId == syncId } ?: return
+        PendingSyncCoordinator.sendOne(getApplication(), phoneConnector, route)
+    }
+
+    /// Bottone "Sincronizza tutti" — reinvia OGNI route ancora in coda
+    /// (mai solo l'ultima): il telefono è idempotente per syncId, un
+    /// re-invio è innocuo.
+    fun sendAllPendingSync() {
+        PendingSyncCoordinator.sendAll(getApplication(), phoneConnector)
     }
 
     private fun persistLastUsedType(type: String) {
@@ -572,6 +743,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                         pending.syncId,
                         distanceMeters = pending.distanceMeters,
                         swimJson = pending.swimJson,
+                        planJson = pending.planJson,
+                        stepSegmentsJson = pending.stepSegmentsJson,
                     )
                     if (sent && pending.syncId == null) {
                         // Entry legacy (scritta da una build precedente
@@ -604,12 +777,16 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         syncId: String? = null,
         distanceMeters: Double? = null,
         swimJson: String? = null,
+        planJson: String? = null,
+        stepSegmentsJson: String? = null,
     ): Boolean {
         if (!phoneConnector.isPhoneReachable()) return false
         return phoneConnector.sendRouteToPhone(
             points, activityType, startedAt, endedAt, avgHr, maxHr, syncId,
             distanceMeters = distanceMeters,
             swim = swimJson?.let { runCatching { JSONObject(it) }.getOrNull() },
+            plan = planJson?.let { runCatching { JSONObject(it) }.getOrNull() },
+            stepSegments = stepSegmentsJson?.let { runCatching { JSONObject(it) }.getOrNull() },
         )
     }
 
@@ -866,11 +1043,10 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
 
     companion object {
-        /// Tipi attività tracciati via GPS quando la sessione è standalone
-        /// (stessi id offerti da IdleScreen per le attività "outdoor").
-        /// Unica fonte di verità: prima duplicata (e disallineata — hike/
-        /// trail mancavano) tra startFromWatch e resumeFromWatch.
-        val GPS_ACTIVITY_TYPES = setOf("run", "walk", "bike", "hike", "trail")
+        /// Tipi attività tracciati via GPS quando la sessione è standalone.
+        /// F7 (D22): delegato al catalogo generato (`watchWear && outdoorGps`)
+        /// — mtb/skate inclusi; stessa fonte di TrackingEngine.isGpsEligible.
+        val GPS_ACTIVITY_TYPES: Set<String> = SportsCatalog.watchOutdoorIds.toSet()
 
         private const val KEY_LAST_USED_TYPE = "lastUsedType"
     }

@@ -1,8 +1,19 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+// F7 (J17) — firma Play: credenziali SOLO da `keystore.properties` nella
+// root del repo (gitignorato, modello in `keystore.properties.example`).
+// Senza il file la release resta non firmata, come prima.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) keystorePropertiesFile.inputStream().use { load(it) }
+}
+val hasReleaseKeystore = keystorePropertiesFile.exists()
 
 android {
     namespace = "com.jimtime.wear"
@@ -22,12 +33,24 @@ android {
         applicationId = "com.jimtime.gabrielegusmeroli"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
+            if (hasReleaseKeystore) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -44,6 +67,10 @@ android {
     }
     buildFeatures {
         compose = true
+        // Serve solo a esporre BuildConfig.DEBUG per il seed finto di
+        // PendingSyncScreen (screenshot) — mai in release, vedi
+        // MainActivity.maybeSeedFakePendingSync.
+        buildConfig = true
     }
 }
 
@@ -62,6 +89,7 @@ dependencies {
     implementation(libs.compose.ui.tooling)
     implementation(libs.wear.tooling.preview)
     implementation(libs.activity.compose)
+    implementation(libs.fragment.ktx)
     implementation(libs.core.splashscreen)
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.lifecycle.runtime.compose)
@@ -87,4 +115,11 @@ dependencies {
     androidTestImplementation(libs.ui.test.junit4)
     debugImplementation(libs.ui.tooling)
     debugImplementation(libs.ui.test.manifest)
+}
+
+// F7 (WP-KE → WP-PAR) — inoltra al test JVM le proprietà del banco di
+// parità (`StepEngineParityDump`); vuote ⇒ il dump ritorna subito.
+tasks.withType<Test> {
+    systemProperty("jt.parity.cases", System.getProperty("jt.parity.cases") ?: "")
+    systemProperty("jt.parity.out", System.getProperty("jt.parity.out") ?: "")
 }

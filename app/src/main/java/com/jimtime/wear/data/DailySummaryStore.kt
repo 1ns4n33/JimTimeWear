@@ -39,6 +39,19 @@ data class DailySummaryNextPlanDay(
     val exercises: Int,
 )
 
+/// F7 (J13, F2 §2.6) — prossima attività sport del piano, stessa forma di
+/// `WatchNextSportDay.toJson` del telefono. Omessa dal telefono se free.
+data class DailySummaryNextSportDay(
+    val week: Int,
+    val day: Int,
+    val label: String,
+    val activityId: String,
+    val sport: String,
+    val title: String?,
+    val summary: String,
+    val guided: Boolean,
+)
+
 data class DailySummary(
     val date: String,
     val sentAt: Long,
@@ -48,6 +61,7 @@ data class DailySummary(
     val nextPlanDay: DailySummaryNextPlanDay?,
     val quickTypes: List<String>,
     val appliedWaterSyncIds: List<String>,
+    val nextSportDay: DailySummaryNextSportDay? = null,
 )
 
 /**
@@ -131,6 +145,7 @@ object DailySummaryStore {
                     exercises = p.optIntTolerant("exercises", 0),
                 )
             }
+            val nextSportDay = parseNextSportDay(o.optJSONObject("nextSportDay"))
             val quickTypesArr = o.optJSONArray("quickTypes")
             val quickTypes = if (quickTypesArr != null) {
                 (0 until quickTypesArr.length()).map { quickTypesArr.optString(it) }
@@ -149,6 +164,29 @@ object DailySummaryStore {
                 nextPlanDay = nextPlanDay,
                 quickTypes = quickTypes,
                 appliedWaterSyncIds = applied,
+                nextSportDay = nextSportDay,
+            )
+        }.getOrNull()
+    }
+
+    /// Tollerante (J13): chiavi essenziali mancanti ⇒ null, mai un'eccezione
+    /// che farebbe cadere l'intero riepilogo.
+    internal fun parseNextSportDay(p: JSONObject?): DailySummaryNextSportDay? {
+        if (p == null) return null
+        return runCatching {
+            val week = (p.opt("week") as? Number)?.toInt() ?: return null
+            val day = (p.opt("day") as? Number)?.toInt() ?: return null
+            val activityId = (p.opt("activityId") as? String)?.takeIf { it.isNotEmpty() } ?: return null
+            val sport = (p.opt("sport") as? String)?.takeIf { it.isNotEmpty() } ?: return null
+            DailySummaryNextSportDay(
+                week = week,
+                day = day,
+                label = (p.opt("label") as? String)?.takeIf { it.isNotEmpty() } ?: "Giorno ${day + 1}",
+                activityId = activityId,
+                sport = sport,
+                title = (p.opt("title") as? String)?.takeIf { it.isNotBlank() },
+                summary = p.opt("summary") as? String ?: "",
+                guided = p.opt("guided") == true,
             )
         }.getOrNull()
     }

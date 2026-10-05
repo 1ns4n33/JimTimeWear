@@ -1,0 +1,2084 @@
+{
+ "version": 1,
+ "defaults": {
+  "profile": {
+   "pace5kSecPerKm": 240,
+   "hrRest": 55,
+   "hrMax": 190,
+   "lthr": null,
+   "ftpW": 250,
+   "swimCssSecPer100": 100,
+   "rowSecPer500": 120,
+   "walkPaceSecPerKm": 720
+  }
+ },
+ "paceZoneFactors": {
+  "recovery": [
+   1.35,
+   1.5
+  ],
+  "easy": [
+   1.2,
+   1.35
+  ],
+  "marathon": [
+   1.1,
+   1.16
+  ],
+  "threshold": [
+   1.04,
+   1.08
+  ],
+  "10k": [
+   1.02,
+   1.05
+  ],
+  "5k": [
+   0.98,
+   1.02
+  ],
+  "3k": [
+   0.94,
+   0.97
+  ],
+  "strides": [
+   0.85,
+   0.92
+  ]
+ },
+ "powerZoneBands": {
+  "1": [0, 55],
+  "2": [56, 75],
+  "3": [76, 90],
+  "4": [91, 105],
+  "5": [106, 120],
+  "6": [121, 150],
+  "7": [151, 200]
+ },
+ "swimZoneFactors": {
+  "easy": [1.12, 1.22],
+  "endurance": [1.05, 1.12],
+  "css": [0.98, 1.03],
+  "vo2": [0.92, 0.97],
+  "sprint": [0.80, 0.90]
+ },
+ "rowZoneFactors": {
+  "ut2": [1.18, 1.26],
+  "ut1": [1.10, 1.17],
+  "at": [1.03, 1.08],
+  "tr": [0.99, 1.02],
+  "an": [0.90, 0.98]
+ },
+ "walkZoneFactor": [0.90, 1.10],
+ "vectors": [
+  {
+   "name": "time_steps_basic",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "warmup",
+      "end": {
+       "type": "time",
+       "sec": 600
+      },
+      "target": {
+       "type": "none"
+      }
+     },
+     {
+      "id": "st_b",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 600000,
+     "d": 2000
+    },
+    {
+     "t": 900000,
+     "d": 2000
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto",
+     "avgPace": 300
+    },
+    {
+     "at": 1,
+     "type": "stepStart",
+     "step": 1
+    },
+    {
+     "at": 2,
+     "type": "stepEnd",
+     "step": 1,
+     "endedBy": "auto",
+     "avgPace": null
+    },
+    {
+     "at": 2,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "distance_step_end",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "distance",
+       "m": 1000
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 200000,
+     "d": 1000
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto",
+     "avgPace": 200
+    },
+    {
+     "at": 1,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "repeat_3x400_60_expansion",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_r",
+      "repeat": 3,
+      "steps": [
+       {
+        "id": "st_rw",
+        "role": "work",
+        "end": {
+         "type": "distance",
+         "m": 400
+        },
+        "target": {
+         "type": "none"
+        }
+       },
+       {
+        "id": "st_rr",
+        "role": "recovery",
+        "end": {
+         "type": "time",
+         "sec": 60
+        },
+        "target": {
+         "type": "none"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "expectExpandedCount": 6,
+   "expectResolved": [
+    {
+     "id": "st_rw#1",
+     "sourceId": "st_rw",
+     "role": "work",
+     "repeatIteration": 1,
+     "repeatCount": 3,
+     "blockId": "st_r"
+    },
+    {
+     "id": "st_rr#1",
+     "sourceId": "st_rr",
+     "role": "recovery",
+     "repeatIteration": 1,
+     "repeatCount": 3,
+     "blockId": "st_r"
+    },
+    {
+     "id": "st_rw#2",
+     "sourceId": "st_rw",
+     "repeatIteration": 2
+    },
+    {
+     "id": "st_rr#2",
+     "sourceId": "st_rr",
+     "repeatIteration": 2
+    },
+    {
+     "id": "st_rw#3",
+     "sourceId": "st_rw",
+     "repeatIteration": 3
+    },
+    {
+     "id": "st_rr#3",
+     "sourceId": "st_rr",
+     "repeatIteration": 3
+    }
+   ]
+  },
+  {
+   "name": "lap_ended_warmup",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "warmup",
+      "end": {
+       "type": "time",
+       "sec": 600
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 5000,
+     "d": 20,
+     "lap": true
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "lap",
+     "avgPace": null
+    },
+    {
+     "at": 1,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "hr_below_recovery",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "recovery",
+      "end": {
+       "type": "hrBelow",
+       "bpm": 130
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 8000,
+     "d": 0,
+     "hr": 125
+    },
+    {
+     "t": 12000,
+     "d": 0,
+     "hr": 125
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "__none__"
+    },
+    {
+     "at": 2,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "hrBelow",
+     "avgPace": null
+    },
+    {
+     "at": 2,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "hr_below_zone_resolves_bound",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "recovery",
+      "end": {
+       "type": "hrBelow",
+       "zone": 2
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "profile": {
+    "hrRest": 55,
+    "hrMax": 190
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "end": {
+      "type": "hrBelow",
+      "value": 150
+     }
+    }
+   ]
+  },
+  {
+   "name": "halfway_and_last_seconds",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 40
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 20000,
+     "d": 0
+    },
+    {
+     "t": 31000,
+     "d": 0
+    },
+    {
+     "t": 40000,
+     "d": 0
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepHalfway",
+     "step": 0
+    },
+    {
+     "at": 2,
+     "type": "stepLastPart",
+     "step": 0,
+     "seconds": 9
+    },
+    {
+     "at": 3,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto",
+     "avgPace": null
+    },
+    {
+     "at": 3,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "last_meters_only_if_300m",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "distance",
+       "m": 200
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 10000,
+     "d": 150
+    },
+    {
+     "t": 20000,
+     "d": 200
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepHalfway",
+     "step": 0
+    },
+    {
+     "at": 2,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto",
+     "avgPace": 100
+    },
+    {
+     "at": 2,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "off_target_too_slow_hysteresis",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 600
+      },
+      "target": {
+       "type": "pace",
+       "fastSecPerKm": 240,
+       "slowSecPerKm": 260
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 20000,
+     "d": 40
+    },
+    {
+     "t": 50000,
+     "d": 100
+    },
+    {
+     "t": 520000,
+     "d": 2000
+    },
+    {
+     "t": 600000,
+     "d": 2050
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepOffTarget",
+     "step": 0,
+     "direction": "tooSlow",
+     "avg": 500
+    },
+    {
+     "at": 2,
+     "type": "stepOffTarget",
+     "step": 0,
+     "direction": "tooSlow",
+     "avg": 500
+    },
+    {
+     "at": 3,
+     "type": "stepHalfway",
+     "step": 0
+    },
+    {
+     "at": 3,
+     "type": "stepBackOnTarget",
+     "step": 0
+    },
+    {
+     "at": 4,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto"
+    },
+    {
+     "at": 4,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "off_target_hr_high",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 120
+      },
+      "target": {
+       "type": "hr",
+       "min": 140,
+       "max": 160
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 20000,
+     "d": 0,
+     "hr": 170
+    },
+    {
+     "t": 50000,
+     "d": 0,
+     "hr": 170
+    },
+    {
+     "t": 60000,
+     "d": 0,
+     "hr": 150
+    },
+    {
+     "t": 120000,
+     "d": 0,
+     "hr": 150
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepOffTarget",
+     "step": 0,
+     "direction": "hrHigh",
+     "avg": 170
+    },
+    {
+     "at": 2,
+     "type": "stepOffTarget",
+     "step": 0,
+     "direction": "hrHigh",
+     "avg": 170
+    },
+    {
+     "at": 3,
+     "type": "stepHalfway",
+     "step": 0
+    },
+    {
+     "at": 4,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto"
+    },
+    {
+     "at": 4,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "off_target_hr_spike_running_average_ignored",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 200
+      },
+      "target": {
+       "type": "hr",
+       "min": 140,
+       "max": 160
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0,
+     "hr": 145
+    },
+    {
+     "t": 20000,
+     "d": 0,
+     "hr": 145
+    },
+    {
+     "t": 40000,
+     "d": 0,
+     "hr": 145
+    },
+    {
+     "t": 60000,
+     "d": 0,
+     "hr": 145
+    },
+    {
+     "t": 80000,
+     "d": 0,
+     "hr": 145
+    },
+    {
+     "t": 90000,
+     "d": 0,
+     "hr": 145
+    },
+    {
+     "t": 95000,
+     "d": 0,
+     "hr": 145
+    },
+    {
+     "t": 98000,
+     "d": 0,
+     "hr": 230
+    },
+    {
+     "t": 100000,
+     "d": 0,
+     "hr": 145
+    },
+    {
+     "t": 200000,
+     "d": 0,
+     "hr": 145
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 7,
+     "type": "__none__"
+    },
+    {
+     "at": 8,
+     "type": "stepHalfway",
+     "step": 0
+    },
+    {
+     "at": 9,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto"
+    },
+    {
+     "at": 9,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "pause_freezes_everything",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 60
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 10000,
+     "d": 50
+    },
+    {
+     "t": 99999,
+     "d": 9999,
+     "paused": true
+    },
+    {
+     "t": 15000,
+     "d": 70
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "__none__"
+    },
+    {
+     "at": 2,
+     "type": "__none__"
+    },
+    {
+     "at": 3,
+     "type": "__none__"
+    }
+   ],
+   "expectStateAfter": {
+    "at": 2,
+    "lastActiveMs": 10000,
+    "lastDistanceM": 50
+   }
+  },
+  {
+   "name": "catch_up_after_suspension",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "warmup",
+      "end": {
+       "type": "time",
+       "sec": 60
+      },
+      "target": {
+       "type": "none"
+      }
+     },
+     {
+      "id": "st_b",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 60
+      },
+      "target": {
+       "type": "none"
+      }
+     },
+     {
+      "id": "st_c",
+      "role": "recovery",
+      "end": {
+       "type": "time",
+       "sec": 60
+      },
+      "target": {
+       "type": "none"
+      }
+     },
+     {
+      "id": "st_d",
+      "role": "cooldown",
+      "end": {
+       "type": "time",
+       "sec": 60
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 230000,
+     "d": 1000
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto"
+    },
+    {
+     "at": 1,
+     "type": "stepStart",
+     "step": 1
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 1,
+     "endedBy": "auto"
+    },
+    {
+     "at": 1,
+     "type": "stepStart",
+     "step": 2
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 2,
+     "endedBy": "auto"
+    },
+    {
+     "at": 1,
+     "type": "stepStart",
+     "step": 3
+    },
+    {
+     "at": 1,
+     "type": "stepHalfway",
+     "step": 3
+    },
+    {
+     "at": 1,
+     "type": "stepLastPart",
+     "step": 3,
+     "seconds": 10
+    }
+   ],
+   "expectStateAfter": {
+    "at": 1,
+    "index": 3,
+    "stepStartActiveMs": 180000
+   }
+  },
+  {
+   "name": "sixty_steps_max_expansion",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_r",
+      "repeat": 30,
+      "steps": [
+       {
+        "id": "st_rw",
+        "role": "work",
+        "end": {
+         "type": "time",
+         "sec": 30
+        },
+        "target": {
+         "type": "none"
+        }
+       },
+       {
+        "id": "st_rr",
+        "role": "recovery",
+        "end": {
+         "type": "time",
+         "sec": 30
+        },
+        "target": {
+         "type": "none"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "expectExpandedCount": 60
+  },
+  {
+   "name": "riegel_10k_to_5k_reference",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "paceZone",
+       "zone": "5k"
+      }
+     }
+    ]
+   },
+   "profile": {
+    "pace5kSecPerKm": null,
+    "pace10kSecPerKm": 300
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "pace",
+      "low": 282,
+      "high": 294,
+      "zoneLabel": "5k"
+     }
+    }
+   ]
+  },
+  {
+   "name": "pct_max_fallback_without_rest",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "hrZone",
+       "zone": 2
+      }
+     }
+    ]
+   },
+   "profile": {
+    "hrRest": null,
+    "hrMax": 190
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "hr",
+      "low": 114,
+      "high": 133
+     }
+    }
+   ]
+  },
+  {
+   "name": "lthr_mode",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "hrZone",
+       "zone": 3
+      }
+     }
+    ]
+   },
+   "profile": {
+    "hrRest": null,
+    "hrMax": null,
+    "lthr": 160
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "hr",
+      "low": 144,
+      "high": 152
+     }
+    }
+   ]
+  },
+  {
+   "name": "default_pace_without_profile",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "paceZone",
+       "zone": "easy"
+      }
+     }
+    ]
+   },
+   "profile": {
+    "pace5kSecPerKm": null,
+    "pace10kSecPerKm": null,
+    "hrRest": null,
+    "hrMax": null,
+    "lthr": null
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "pace",
+      "low": 360,
+      "high": 405,
+      "zoneLabel": "easy"
+     }
+    }
+   ]
+  },
+  {
+   "name": "treadmill_distance_from_speed",
+   "helper": "treadmillDistanceM",
+   "requires": "treadmillHelper",
+   "segments": [
+    {
+     "startActiveSecond": 0,
+     "speedKmh": 10
+    },
+    {
+     "startActiveSecond": 60,
+     "speedKmh": 12
+    }
+   ],
+   "activeSec": 90,
+   "expectM": 266.7
+  },
+  {
+   "name": "heat_pace_scale_5k",
+   "requires": "profileResolver",
+   "paceScale": 1.0375,
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_r",
+      "repeat": 6,
+      "steps": [
+       {
+        "id": "st_w",
+        "role": "work",
+        "end": {
+         "type": "distance",
+         "m": 800
+        },
+        "target": {
+         "type": "paceZone",
+         "zone": "5k"
+        }
+       },
+       {
+        "id": "st_rec",
+        "role": "recovery",
+        "end": {
+         "type": "time",
+         "sec": 60
+        },
+        "target": {
+         "type": "none"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "expectExpandedCount": 12,
+   "expectResolved": [
+    {
+     "id": "st_w#1",
+     "target": {
+      "kind": "pace",
+      "low": 244,
+      "high": 254,
+      "zoneLabel": "5k"
+     }
+    },
+    {
+     "id": "st_rec#1",
+     "target": {
+      "kind": "none",
+      "low": 0,
+      "high": 0
+     }
+    }
+   ]
+  },
+  {
+   "name": "heat_pace_scale_absolute",
+   "requires": "profileResolver",
+   "paceScale": 1.015,
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_p",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 600
+      },
+      "target": {
+       "type": "pace",
+       "fastSecPerKm": 230,
+       "slowSecPerKm": 240
+      }
+     },
+     {
+      "id": "st_hrc",
+      "role": "cooldown",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "hrZone",
+       "zone": 2
+      }
+     }
+    ]
+   },
+   "expectExpandedCount": 2,
+   "expectResolved": [
+    {
+     "id": "st_p",
+     "target": {
+      "kind": "pace",
+      "low": 233,
+      "high": 244
+     }
+    },
+    {
+     "id": "st_hrc",
+     "target": {
+      "kind": "hr",
+      "low": 136,
+      "high": 150,
+      "zoneLabel": "2"
+     }
+    }
+   ]
+  },
+  {
+   "name": "power_zone_resolves_from_ftp",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 600
+      },
+      "target": {
+       "type": "powerZone",
+       "zone": 2
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "power",
+      "low": 140,
+      "high": 188,
+      "zoneLabel": "P2"
+     }
+    }
+   ]
+  },
+  {
+   "name": "power_pct_absolute_band",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 600
+      },
+      "target": {
+       "type": "powerPct",
+       "fromPctFtp": 88,
+       "toPctFtp": 94
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "power",
+      "low": 220,
+      "high": 235
+     }
+    }
+   ]
+  },
+  {
+   "name": "power_off_target_low_hysteresis",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 600
+      },
+      "target": {
+       "type": "power",
+       "min": 200,
+       "max": 220
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 20000,
+     "d": 0,
+     "pw": 150
+    },
+    {
+     "t": 50000,
+     "d": 0,
+     "pw": 150
+    },
+    {
+     "t": 51000,
+     "d": 0,
+     "pw": 330
+    },
+    {
+     "t": 600000,
+     "d": 0,
+     "pw": 210
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepOffTarget",
+     "step": 0,
+     "direction": "powerLow",
+     "avg": 150
+    },
+    {
+     "at": 2,
+     "type": "stepOffTarget",
+     "step": 0,
+     "direction": "powerLow",
+     "avg": 150
+    },
+    {
+     "at": 3,
+     "type": "stepBackOnTarget",
+     "step": 0
+    },
+    {
+     "at": 4,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto",
+     "avgPower": 210
+    },
+    {
+     "at": 4,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "power_missing_signal_no_events",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "power",
+       "min": 200,
+       "max": 220
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 150000,
+     "d": 0
+    },
+    {
+     "t": 300000,
+     "d": 0
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepHalfway",
+     "step": 0
+    },
+    {
+     "at": 2,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto",
+     "avgPace": null,
+     "avgPower": null,
+     "inRangePct": null
+    },
+    {
+     "at": 2,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "speed_resolves_to_pace_kmh",
+   "requires": "unitConversion",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "speed",
+       "fromKmh": 20,
+       "toKmh": 24,
+       "inclinePct": 3
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "pace",
+      "low": 150,
+      "high": 180,
+      "inclinePct": 3
+     }
+    }
+   ]
+  },
+  {
+   "name": "pace500_resolves_to_pace",
+   "requires": "unitConversion",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "pace500",
+       "fastSecPer500": 105,
+       "slowSecPer500": 112
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "pace",
+      "low": 210,
+      "high": 224
+     }
+    }
+   ]
+  },
+  {
+   "name": "swim_pace_resolves_to_pace",
+   "requires": "unitConversion",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "swimPace",
+       "fastSecPer100": 95,
+       "slowSecPer100": 100
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "pace",
+      "low": 950,
+      "high": 1000
+     }
+    }
+   ]
+  },
+  {
+   "name": "lengths_pool25_to_distance",
+   "requires": "unitConversion",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "lengths",
+       "n": 4
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "end": {
+      "type": "distance",
+      "value": 100
+     }
+    }
+   ]
+  },
+  {
+   "name": "lengths_pool50_param",
+   "requires": "unitConversion",
+   "poolLengthM": 50,
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "lengths",
+       "n": 3
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "end": {
+      "type": "distance",
+      "value": 150
+     }
+    }
+   ]
+  },
+  {
+   "name": "swim_zone_css_band",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "swimPaceZone",
+       "zone": "css"
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "pace",
+      "low": 980,
+      "high": 1030,
+      "zoneLabel": "css"
+     }
+    }
+   ]
+  },
+  {
+   "name": "row_zone_ut2_band",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 300
+      },
+      "target": {
+       "type": "rowZone",
+       "zone": "ut2"
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "pace",
+      "low": 284,
+      "high": 302,
+      "zoneLabel": "ut2"
+     }
+    }
+   ]
+  },
+  {
+   "name": "walk_zone_from_walk_pace",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "recovery",
+      "end": {
+       "type": "time",
+       "sec": 120
+      },
+      "target": {
+       "type": "paceZone",
+       "zone": "walk"
+      }
+     }
+    ]
+   },
+   "expectResolved": [
+    {
+     "id": "st_a",
+     "target": {
+      "kind": "pace",
+      "low": 648,
+      "high": 792,
+      "zoneLabel": "walk"
+     }
+    }
+   ]
+  },
+  {
+   "name": "run_walk_8x1_2_expansion",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_k2",
+      "repeat": 8,
+      "steps": [
+       {
+        "id": "st_k2w",
+        "role": "work",
+        "end": {
+         "type": "time",
+         "sec": 60
+        },
+        "target": {
+         "type": "pace",
+         "fastSecPerKm": 300,
+         "slowSecPerKm": 360
+        }
+       },
+       {
+        "id": "st_k2r",
+        "role": "recovery",
+        "end": {
+         "type": "time",
+         "sec": 120
+        },
+        "target": {
+         "type": "none"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "expectExpandedCount": 16,
+   "expectResolved": [
+    {
+     "id": "st_k2w#1",
+     "sourceId": "st_k2w",
+     "repeatIteration": 1,
+     "repeatCount": 8,
+     "blockId": "st_k2",
+     "target": {
+      "kind": "pace",
+      "low": 300,
+      "high": 360
+     }
+    },
+    {
+     "id": "st_k2r#1",
+     "sourceId": "st_k2r",
+     "repeatIteration": 1,
+     "target": {
+      "kind": "none",
+      "low": 0,
+      "high": 0
+     }
+    }
+   ],
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 250000,
+     "d": 0
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto"
+    },
+    {
+     "at": 1,
+     "type": "stepStart",
+     "step": 1
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 1,
+     "endedBy": "auto"
+    },
+    {
+     "at": 1,
+     "type": "stepStart",
+     "step": 2
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 2,
+     "endedBy": "auto"
+    },
+    {
+     "at": 1,
+     "type": "stepStart",
+     "step": 3
+    }
+   ]
+  },
+  {
+   "name": "walk_zone_no_off_target_cues",
+   "requires": "profileResolver",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "recovery",
+      "end": {
+       "type": "time",
+       "sec": 180
+      },
+      "target": {
+       "type": "paceZone",
+       "zone": "walk"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 60000,
+     "d": 66.7
+    },
+    {
+     "t": 180000,
+     "d": 200
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "__none__"
+    },
+    {
+     "at": 2,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "auto",
+     "avgPace": 900
+    },
+    {
+     "at": 2,
+     "type": "workoutEnd"
+    }
+   ]
+  },
+  {
+   "name": "lap_on_time_step_next_starts_at_lap",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "warmup",
+      "end": {
+       "type": "time",
+       "sec": 600
+      },
+      "target": {
+       "type": "none"
+      }
+     },
+     {
+      "id": "st_b",
+      "role": "work",
+      "end": {
+       "type": "time",
+       "sec": 60
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 100000,
+     "d": 300,
+     "lap": true
+    },
+    {
+     "t": 160000,
+     "d": 505
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "lap",
+     "avgPace": 333.3
+    },
+    {
+     "at": 1,
+     "type": "stepStart",
+     "step": 1
+    },
+    {
+     "at": 2,
+     "type": "stepEnd",
+     "step": 1,
+     "endedBy": "auto",
+     "avgPace": 292.7
+    },
+    {
+     "at": 2,
+     "type": "workoutEnd"
+    }
+   ],
+   "expectStateAfter": {
+    "at": 1,
+    "index": 1,
+    "stepStartActiveMs": 100000,
+    "stepStartDistanceM": 300
+   }
+  },
+  {
+   "name": "lap_on_distance_step_next_starts_at_lap",
+   "structure": {
+    "v": 1,
+    "steps": [
+     {
+      "id": "st_a",
+      "role": "work",
+      "end": {
+       "type": "distance",
+       "m": 800
+      },
+      "target": {
+       "type": "none"
+      }
+     },
+     {
+      "id": "st_b",
+      "role": "work",
+      "end": {
+       "type": "distance",
+       "m": 800
+      },
+      "target": {
+       "type": "none"
+      }
+     }
+    ]
+   },
+   "samples": [
+    {
+     "t": 0,
+     "d": 0
+    },
+    {
+     "t": 90000,
+     "d": 300,
+     "lap": true
+    },
+    {
+     "t": 300000,
+     "d": 1100
+    }
+   ],
+   "expectEvents": [
+    {
+     "at": 0,
+     "type": "stepStart",
+     "step": 0
+    },
+    {
+     "at": 1,
+     "type": "stepEnd",
+     "step": 0,
+     "endedBy": "lap",
+     "avgPace": 300
+    },
+    {
+     "at": 1,
+     "type": "stepStart",
+     "step": 1
+    },
+    {
+     "at": 2,
+     "type": "stepEnd",
+     "step": 1,
+     "endedBy": "auto",
+     "avgPace": 262.5
+    },
+    {
+     "at": 2,
+     "type": "workoutEnd"
+    }
+   ],
+   "expectStateAfter": {
+    "at": 1,
+    "index": 1,
+    "stepStartActiveMs": 90000,
+    "stepStartDistanceM": 300
+   }
+  }
+ ]
+}

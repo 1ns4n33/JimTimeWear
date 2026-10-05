@@ -1,15 +1,80 @@
 package com.jimtime.wear.data
 
+import android.os.SystemClock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * F7 (correzioni verificatore) — tempo ATTIVO della sessione da un orologio
+ * monotono: somma i delta solo fuori pausa. Puro (l'istante arriva dal
+ * chiamante), quindi testabile. Prima `elapsedSeconds` contava i giri del
+ * ticker (un ritardo del ciclo allungava le fasi a tempo) e il recovery lo
+ * rifaceva da `now - startedAt` (pause e ritardi inclusi).
+ */
+class ActiveClock {
+    private var baseMs = 0L
+    /** Istante monotono dell'ultima ripresa; `null` = fermo (pausa o nessuna sessione). */
+    private var runningSinceMono: Long? = null
+
+    fun reset(baseActiveMs: Long, running: Boolean, nowMono: Long) {
+        baseMs = baseActiveMs.coerceAtLeast(0L)
+        runningSinceMono = if (running) nowMono else null
+    }
+
+    fun pause(nowMono: Long) {
+        val since = runningSinceMono ?: return
+        baseMs += (nowMono - since).coerceAtLeast(0L)
+        runningSinceMono = null
+    }
+
+    fun resume(nowMono: Long) {
+        if (runningSinceMono == null) runningSinceMono = nowMono
+    }
+
+    fun activeMs(nowMono: Long): Long =
+        baseMs + (runningSinceMono?.let { (nowMono - it).coerceAtLeast(0L) } ?: 0L)
+
+    companion object {
+        /**
+         * Tempo attivo alla ripresa da un checkpoint: quello salvato, più il
+         * tempo reale trascorso da allora SOLO se la sessione non era in
+         * pausa; mai meno di quanto il motore guidato aveva già visto
+         * ([floorActiveMs] = `engine.lastActiveMs`), così le fasi non si
+         * sovrappongono.
+         */
+        fun resumeActiveMs(
+            savedActiveMs: Long,
+            savedAtWallMs: Long,
+            wasPaused: Boolean,
+            nowWallMs: Long,
+            floorActiveMs: Long = 0L,
+        ): Long {
+            val gap = if (wasPaused) 0L else (nowWallMs - savedAtWallMs).coerceAtLeast(0L)
+            return maxOf(savedActiveMs.coerceAtLeast(0L) + gap, floorActiveMs)
+        }
+    }
+}
 
 object SessionRepository {
     private val _state = MutableStateFlow(SessionState())
     val state: StateFlow<SessionState> = _state.asStateFlow()
 
+    private val clock = ActiveClock()
+
+    /// Orologio monotono (sostituibile solo per i test).
+    internal var monoNow: () -> Long = { SystemClock.elapsedRealtime() }
+
+    /// Tempo attivo corrente in ms (pause escluse) — `elapsedSeconds` ne è
+    /// la parte intera, aggiornata da [tick].
+    fun activeMs(): Long = synchronized(clock) { clock.activeMs(monoNow()) }
+
+    private fun resetClock(baseActiveMs: Long, running: Boolean) =
+        synchronized(clock) { clock.reset(baseActiveMs, running, monoNow()) }
+
     fun startSession(type: String, startedAt: Long, swim: SwimData? = null) {
         val alreadyElapsed = ((System.currentTimeMillis() - startedAt) / 1000L).coerceAtLeast(0L)
+        resetClock(alreadyElapsed * 1000L, running = true)
         _state.value = SessionState(
             isActive       = true,
             activityType   = type,
@@ -28,16 +93,40 @@ object SessionRepository {
         )
     }
 
-    fun startStandaloneSession(type: String, swim: SwimData? = null) {
+    /// F7 — `planRefJson`/`guided`/`guidedVariant` per una sessione nata da
+    /// un giorno di piano (dal polso o da `startSession{wristAuthoritative}`
+    /// del telefono, D3/D5). `startedAt` = quello del comando del telefono
+    /// quando c'è (il mirror lo usa come chiave); il cronometro parte
+    /// comunque da 0 qui, come ogni altra sessione standalone.
+    fun startStandaloneSession(
+        type: String,
+        swim: SwimData? = null,
+        planRefJson: String? = null,
+        guided: Boolean = false,
+        guidedVariant: String? = null,
+        startedAt: Long = System.currentTimeMillis(),
+    ) {
+        resetClock(0L, running = true)
         _state.value = SessionState(
-            isActive     = true,
-            activityType = type,
-            startedAt    = System.currentTimeMillis(),
-            isStandalone = true,
-            kind         = SessionKind.ACTIVITY,
-            workout      = null,
-            swim         = swim,
+            isActive      = true,
+            activityType  = type,
+            startedAt     = startedAt,
+            isStandalone  = true,
+            kind          = SessionKind.ACTIVITY,
+            workout       = null,
+            swim          = swim,
+            guided        = guided,
+            planRefJson   = planRefJson,
+            guidedVariant = guidedVariant,
         )
+    }
+
+    /// F7 (D24) — striscia fase del companion. Solo su una sessione viva NON
+    /// guidata al polso: con il motore al polso la fase è già sullo schermo.
+    fun updateGuidedStep(step: GuidedStepMirror) {
+        val current = _state.value
+        if (!current.isActive || current.guided) return
+        _state.value = current.copy(guidedStep = step)
     }
 
     /// F5b — aggregati correnti dal `HealthServicesExerciseSource` di
@@ -50,15 +139,28 @@ object SessionRepository {
         )
     }
 
+    /// F7 — `guidedStep{clear:true}` dal telefono: la striscia sparisce subito.
+    fun clearGuidedStep() {
+        val current = _state.value
+        if (current.guidedStep == null) return
+        _state.value = current.copy(guidedStep = null)
+    }
+
     fun stopSession() {
+        resetClock(0L, running = false)
         _state.value = SessionState()
     }
 
     fun pauseSession() {
-        _state.value = _state.value.copy(isPaused = true)
+        val activeMs = synchronized(clock) {
+            clock.pause(monoNow())
+            clock.activeMs(monoNow())
+        }
+        _state.value = _state.value.copy(isPaused = true, elapsedSeconds = activeMs / 1000L)
     }
 
     fun resumeSession() {
+        synchronized(clock) { clock.resume(monoNow()) }
         _state.value = _state.value.copy(isPaused = false)
     }
 
@@ -66,37 +168,52 @@ object SessionRepository {
         _state.value = _state.value.copy(distanceMeters = meters)
     }
 
+    /// Riallinea `elapsedSeconds` all'orologio monotono — idempotente: due
+    /// chiamanti (VM e service) non contano più due volte, e un giro del
+    /// ticker in ritardo non allunga il tempo.
     fun tick() {
         val current = _state.value
         if (current.isActive && !current.isPaused) {
-            _state.value = current.copy(elapsedSeconds = current.elapsedSeconds + 1)
+            val sec = activeMs() / 1000L
+            if (sec != current.elapsedSeconds) _state.value = current.copy(elapsedSeconds = sec)
         }
     }
 
     /// Crash recovery: ricostruisce una sessione ACTIVITY standalone da un
     /// checkpoint dopo che il processo (e quindi questo intero singleton)
-    /// è stato ucciso e ricreato. elapsedSeconds è approssimato dal
-    /// wall-clock (now - startedAt) perché il contatore in-memory che lo
-    /// teneva preciso attraverso le pause è andato perso col processo —
-    /// non torna esatto se c'erano state pause, ma è la sola sorgente di
-    /// verità sopravvissuta al kill.
+    /// è stato ucciso e ricreato. F7: `activeMs` = tempo attivo calcolato
+    /// dal chiamante con [ActiveClock.resumeActiveMs] (pause escluse);
+    /// `null` (checkpoint scritto prima di F7) ⇒ vecchia approssimazione
+    /// dal wall-clock (now - startedAt). `distanceMeters` = dai punti
+    /// ripristinati, visibile subito anche se la sessione riparte in pausa.
     fun restoreStandaloneSession(
         activityType: String,
         startedAt: Long,
         isPaused: Boolean,
         swim: SwimData? = null,
+        planRefJson: String? = null,
+        guided: Boolean = false,
+        guidedVariant: String? = null,
+        activeMs: Long? = null,
+        distanceMeters: Double = 0.0,
     ) {
-        val elapsed = ((System.currentTimeMillis() - startedAt) / 1000L).coerceAtLeast(0L)
+        val restoredMs = activeMs
+            ?: ((System.currentTimeMillis() - startedAt).coerceAtLeast(0L))
+        resetClock(restoredMs, running = !isPaused)
         _state.value = SessionState(
             isActive       = true,
             isPaused       = isPaused,
             activityType   = activityType,
             startedAt      = startedAt,
-            elapsedSeconds = elapsed,
+            elapsedSeconds = restoredMs / 1000L,
+            distanceMeters = distanceMeters,
             isStandalone   = true,
             kind           = SessionKind.ACTIVITY,
             workout        = null,
             swim           = swim,
+            guided         = guided,
+            planRefJson    = planRefJson,
+            guidedVariant  = guidedVariant,
         )
     }
 
@@ -107,6 +224,7 @@ object SessionRepository {
         context: WorkoutContext,
     ) {
         val alreadyElapsed = ((System.currentTimeMillis() - startedAt) / 1000L).coerceAtLeast(0L)
+        resetClock(alreadyElapsed * 1000L, running = true)
         _state.value = SessionState(
             isActive       = true,
             activityType   = "workout",

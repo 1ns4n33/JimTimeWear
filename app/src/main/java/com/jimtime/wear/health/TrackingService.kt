@@ -17,10 +17,17 @@ import androidx.wear.ongoing.OngoingActivity
 import androidx.wear.ongoing.Status
 import com.jimtime.wear.R
 import com.jimtime.wear.data.ActiveSessionStore
+import com.jimtime.wear.data.MessagePaths
 import com.jimtime.wear.data.PendingRouteStore
+import com.jimtime.wear.data.PhoneConnector
 import com.jimtime.wear.data.SessionKind
 import com.jimtime.wear.data.SessionRepository
 import com.jimtime.wear.data.SessionState
+import com.jimtime.wear.data.WristGuidedStart
+import com.jimtime.wear.guided.GuidedRunRepository
+import com.jimtime.wear.guided.StepEvent
+import com.jimtime.wear.presentation.GuidedHaptics
+import com.jimtime.wear.presentation.GuidedVoice
 import com.jimtime.wear.presentation.MainActivity
 import com.jimtime.wear.presentation.vibrate
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +36,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Foreground service che possiede sensori GPS/HR e timer per UNA sessione
@@ -58,14 +67,39 @@ class TrackingService : Service() {
     private var swimStartedAt: Long? = null
     private var swimPaused = false
 
+    // F7 (D22) — distanza INCREMENTALE dai fix GPS: indice del prossimo
+    // punto da sommare e totale accumulato, per la sessione [distSessionStartedAt].
+    // Nuova sessione o rotta azzerata (gpsTracker.start) ⇒ ripartono da 0;
+    // dopo un recovery il service è nuovo ⇒ primo tick ricalcola sui punti
+    // ripristinati.
+    private var distNextIndex = 0
+    private var distTotalM = 0.0
+    private var distSessionStartedAt: Long? = null
+
+    private val phoneConnector by lazy { PhoneConnector(applicationContext) }
+
+    // F7 (correzioni) — i salvataggi del checkpoint girano fuori dal tick,
+    // uno alla volta (l'ordine conta: l'ultimo scritto è il più recente).
+    private val checkpointMutex = Mutex()
+    // Ultimo stato di pausa per cui è stato scritto un checkpoint: a ogni
+    // pausa/ripresa se ne scrive uno, così il recovery sa quanto tempo
+    // reale contare come attivo.
+    private var checkpointedPaused: Boolean? = null
+
+    /// `startForeground` rifiutato (permesso «durante l'uso» mancante, FGS
+    /// da background negata): la sessione è tornata a riposo, il service
+    /// non deve fare altro.
+    private var foregroundFailed = false
+
     override fun onCreate() {
         super.onCreate()
         TrackingEngine.init(applicationContext)
         startForegroundNow()
-        acquireWakeLock()
+        if (!foregroundFailed) acquireWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (foregroundFailed) return START_NOT_STICKY
         if (intent == null) {
             // Il processo è stato ucciso e il sistema ci ha ricreati per
             // START_STICKY: SessionRepository (singleton in-memory) è
@@ -98,6 +132,12 @@ class TrackingService : Service() {
             SessionRepository.state.collect { state ->
                 val owned = state.isStandalone && state.kind == SessionKind.ACTIVITY
                 if (!owned) return@collect
+
+                if (state.isActive && checkpointedPaused != state.isPaused) {
+                    // Pausa/ripresa (o primo stato visto): checkpoint subito.
+                    checkpointedPaused = state.isPaused
+                    saveCheckpointAsync()
+                }
 
                 if (TrackingEngine.isSwimActivity(state.activityType)) {
                     observeSwim(state)
@@ -175,6 +215,10 @@ class TrackingService : Service() {
             while (true) {
                 delay(1_000)
                 SessionRepository.tick()
+                if (swimStartedAt == null) {
+                    updateDistanceFromGps()
+                    tickGuided()
+                }
                 // F5b (§7) — avanza la guida SOLO per una sessione swim in
                 // corso; questo stesso ticker è condiviso con GPS/HR, dove
                 // la guida non esiste (SwimGuideRepository.tick su nessuna
@@ -196,6 +240,74 @@ class TrackingService : Service() {
         tickerJob = null
     }
 
+    /// F7 (D22) — la distanza la calcola il service, non più (solo) la VM:
+    /// con la VM distrutta a schermo spento il motore vedrebbe la distanza
+    /// congelata e le fasi a distanza non finirebbero mai.
+    private fun updateDistanceFromGps() {
+        val state = SessionRepository.state.value
+        if (!state.isActive || !TrackingEngine.isGpsEligible(state.activityType)) return
+        if (distSessionStartedAt != state.startedAt) {
+            distSessionStartedAt = state.startedAt
+            distNextIndex = 0
+            distTotalM = 0.0
+        }
+        val points = TrackingEngine.gpsTracker.points.value
+        if (points.size < distNextIndex) {
+            // Rotta azzerata sotto di noi (start() di una nuova raccolta).
+            distNextIndex = 0
+            distTotalM = 0.0
+        }
+        var i = distNextIndex.coerceAtLeast(1)
+        while (i < points.size) {
+            distTotalM += TrackingEngine.haversineM(points[i - 1], points[i])
+            i++
+        }
+        if (points.size > distNextIndex) distNextIndex = points.size
+        SessionRepository.updateDistance(distTotalM)
+    }
+
+    /// F7 (§2.9) — un campione al motore a fasi (puro + stato), poi gli
+    /// effetti qui: aptica, voce, mirror al telefono, checkpoint a fine fase.
+    private suspend fun tickGuided() {
+        if (!GuidedRunRepository.isActive) return
+        val state = SessionRepository.state.value
+        if (!state.isActive) return
+        val now = System.currentTimeMillis()
+        val hr = TrackingEngine.workoutManager.heartRate.value.takeIf { it > 0 }
+        // Tempo attivo dall'orologio monotono (pause escluse), al ms: il
+        // ritmo del ticker non conta più.
+        val activeMs = SessionRepository.activeMs()
+        val events = GuidedRunRepository.tick(
+            nowMs = now,
+            activeMs = activeMs,
+            distanceM = state.distanceMeters,
+            hr = hr,
+            paused = state.isPaused,
+        )
+        // 3-2-1 delle fasi a tempo (mai per i metri): un click per tick.
+        if (GuidedRunRepository.takeCountdownClicks() > 0) {
+            runCatching { GuidedHaptics.countdownClick(applicationContext) }
+        }
+        val lang = GuidedRunRepository.lang
+        var stepEnded = false
+        for (e in events) {
+            runCatching { GuidedHaptics.play(applicationContext, e) }
+            runCatching { GuidedVoice.speak(applicationContext, e, GuidedRunRepository.stepAt(e.stepIndex), lang) }
+            if (e is StepEvent.StepEnd) stepEnded = true
+        }
+        if (stepEnded) saveCheckpointAsync()
+        if (GuidedRunRepository.mirrorDue(now, state.isPaused)) {
+            val payload = GuidedRunRepository.mirrorPayload(
+                startedAt = state.startedAt,
+                elapsedSec = (activeMs / 1000L).toInt(),
+                distanceM = state.distanceMeters,
+                hr = hr,
+            )
+            // Mai atteso nel ticker: un Bluetooth lento non deve fermarlo.
+            scope.launch { runCatching { phoneConnector.sendMirror(payload) } }
+        }
+    }
+
     private suspend fun finishAndStop() {
         stopTicker()
         if (swimStartedAt != null) {
@@ -215,6 +327,14 @@ class TrackingService : Service() {
             TrackingEngine.gpsTracker.stop()
             TrackingEngine.resetGpsTracking()
         }
+        // F7 — i segmenti li ha già presi stopFromWatch (takeSegments PRIMA
+        // di stopSession); qui solo pulizia, idempotente.
+        GuidedRunRepository.stop()
+        runCatching { GuidedVoice.shutdown() }
+        checkpointedPaused = null
+        distSessionStartedAt = null
+        distNextIndex = 0
+        distTotalM = 0.0
         // Il checkpoint va cancellato SOLO se una copia definitiva è già
         // stata scritta in PendingRouteStore (stopFromWatch la scrive
         // PRIMA di flippare lo stato) — altrimenti un crash/kill che porta
@@ -234,31 +354,50 @@ class TrackingService : Service() {
         checkpointJob = scope.launch {
             while (true) {
                 delay(60_000)
-                val state = SessionRepository.state.value
-                if (!(state.isActive && state.isStandalone && state.kind == SessionKind.ACTIVITY)) {
-                    continue
-                }
-                val hr = TrackingEngine.workoutManager.snapshot()
-                ActiveSessionStore.save(
-                    applicationContext,
-                    ActiveSessionStore.Checkpoint(
-                        activityType = state.activityType,
-                        startedAt    = state.startedAt,
-                        isPaused     = state.isPaused,
-                        lastUpdateMs = System.currentTimeMillis(),
-                        // Risoluzione piena: il downsample per il limite
-                        // ~100KB del MessageClient avviene solo all'invio
-                        // (PhoneConnector.sendRouteToPhone), non qui.
-                        points       = TrackingEngine.gpsTracker.points.value,
-                        hrSum        = hr.hrSum,
-                        hrCount      = hr.hrCount,
-                        hrMax        = hr.hrMax,
-                        swimLocation    = state.swim?.location,
-                        swimPoolLengthM = state.swim?.poolLengthM,
-                    ),
-                )
+                saveCheckpointAsync()
             }
         }
+    }
+
+    /// Ogni 60 s, a ogni pausa/ripresa e, F7 (D18), a ogni fine fase
+    /// guidata. Lo stato si fotografa SUBITO (coerente con l'istante),
+    /// la scrittura gira fuori dal ticker, serializzata.
+    private fun saveCheckpointAsync() {
+        val checkpoint = buildCheckpoint() ?: return
+        scope.launch {
+            checkpointMutex.withLock {
+                // Una sessione chiusa nel frattempo non va resuscitata da
+                // una scrittura arrivata in ritardo.
+                if (SessionRepository.state.value.startedAt != checkpoint.startedAt ||
+                    !SessionRepository.state.value.isActive
+                ) return@withLock
+                ActiveSessionStore.save(applicationContext, checkpoint)
+            }
+        }
+    }
+
+    private fun buildCheckpoint(): ActiveSessionStore.Checkpoint? {
+        val state = SessionRepository.state.value
+        if (!(state.isActive && state.isStandalone && state.kind == SessionKind.ACTIVITY)) return null
+        val hr = TrackingEngine.workoutManager.snapshot()
+        return ActiveSessionStore.Checkpoint(
+                activityType = state.activityType,
+                startedAt    = state.startedAt,
+                isPaused     = state.isPaused,
+                lastUpdateMs = System.currentTimeMillis(),
+                // Risoluzione piena: il downsample per il limite
+                // ~100KB del MessageClient avviene solo all'invio
+                // (PhoneConnector.sendRouteToPhone), non qui.
+                points       = TrackingEngine.gpsTracker.points.value,
+                hrSum        = hr.hrSum,
+                hrCount      = hr.hrCount,
+                hrMax        = hr.hrMax,
+                swimLocation    = state.swim?.location,
+                swimPoolLengthM = state.swim?.poolLengthM,
+                guidedJson   = GuidedRunRepository.snapshot()?.toJson()?.toString(),
+                planJson     = state.planRefJson,
+                activeMs     = SessionRepository.activeMs(),
+            )
     }
 
     // ── Notification / OngoingActivity ──────────────────────────────────
@@ -270,9 +409,13 @@ class TrackingService : Service() {
                 NotificationChannel(CHANNEL_ID, "Allenamento", NotificationManager.IMPORTANCE_LOW)
             )
         }
+        // F7 (J12) — il tocco sul chip riporta alla sessione in corso.
         val contentIntent = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE,
+            this, 0,
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(MessagePaths.EXTRA_OPEN_SESSION, true),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Allenamento in corso")
@@ -313,8 +456,21 @@ class TrackingService : Service() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             }
             startForeground(NOTIFICATION_ID, notification, type)
+            WristGuidedStart.onForegroundStarted(applicationContext)
         } catch (e: Exception) {
+            // F7 (correzioni) — senza FGS niente GPS/timer in background: la
+            // sessione torna a riposo invece di restare «attiva» col
+            // cronometro fermo. Un checkpoint su disco (recovery) resta lì
+            // per il prossimo avvio dell'app.
             Log.e(TAG, "startForeground(location) failed — stopping", e)
+            foregroundFailed = true
+            // Avvio dal telefono: torna «in sospeso» con la notifica.
+            WristGuidedStart.onForegroundRefused(applicationContext)
+            val st = SessionRepository.state.value
+            if (st.isActive && st.isStandalone && st.kind == SessionKind.ACTIVITY) {
+                GuidedRunRepository.stop()
+                SessionRepository.stopSession()
+            }
             stopSelf()
         }
     }

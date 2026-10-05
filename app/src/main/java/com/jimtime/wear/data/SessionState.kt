@@ -58,6 +58,28 @@ data class SwimData(
     val workout: SwimWorkoutWire? = null,
 )
 
+/// F7 (D24, F2 §2.4) — fase corrente di una corsa guidata DAL TELEFONO
+/// (companion F1), spinta con `guidedStep` ogni ~5 s e al cambio fase.
+/// [receivedAtMs] = orologio del polso alla ricezione: la striscia vale
+/// [VALID_MS] senza aggiornamenti, poi la UI la nasconde ([isFresh]).
+data class GuidedStepMirror(
+    val index: Int,
+    val total: Int,
+    val label: String,
+    val remaining: String,
+    val target: String,
+    val next: String?,
+    val endsAt: Long?,
+    val finished: Boolean,
+    val receivedAtMs: Long,
+) {
+    fun isFresh(nowMs: Long): Boolean = nowMs - receivedAtMs < VALID_MS
+
+    companion object {
+        const val VALID_MS = 60_000L
+    }
+}
+
 data class SessionState(
     val isActive: Boolean = false,
     val isPaused: Boolean = false,
@@ -71,6 +93,17 @@ data class SessionState(
     val workout: WorkoutContext? = null,
     // ── F5b Swim extension ───────────────────────────────────────────────
     val swim: SwimData? = null,
+    // ── F7 Schede multisport al polso ────────────────────────────────────
+    /// `true` = sessione standalone con il motore a fasi armato
+    /// (GuidedRunRepository): la rotta `session` mostra GuidedSessionScreen.
+    val guided: Boolean = false,
+    /// `plan` del wire (PlanActivityRef.toUploadJson) se la sessione nasce
+    /// da un giorno di piano, guidata o no — rispedito in routeSync.
+    val planRefJson: String? = null,
+    /// `'reduced'` per la ridotta proposta dal telefono (D16), altrimenti null.
+    val guidedVariant: String? = null,
+    /// Companion (D24): ultima fase spinta dal telefono, null se nessuna.
+    val guidedStep: GuidedStepMirror? = null,
 ) {
     val paceSecondsPerKm: Double
         get() = if (distanceMeters > 100 && elapsedSeconds > 0)

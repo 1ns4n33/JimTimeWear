@@ -49,7 +49,7 @@ object SportsCatalog {
         SportsCatalogEntry("squash", "Squash", "🎾", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
         SportsCatalogEntry("beach_volley", "Beach volley", "🏐", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
         SportsCatalogEntry("calcio5", "Calcio a 5", "⚽", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
-        SportsCatalogEntry("rowing_machine", "Vogatore", "🚣", enabled = false, watch = false, watchWear = false, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("rowing_machine", "Vogatore", "🚣", enabled = true, watch = false, watchWear = false, outdoorGps = false, indoor = true),
         SportsCatalogEntry("boxing", "Boxe", "🥊", enabled = false, watch = false, watchWear = false, outdoorGps = false, indoor = false),
     )
 

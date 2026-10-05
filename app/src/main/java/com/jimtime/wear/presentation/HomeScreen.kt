@@ -44,19 +44,37 @@ import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
 import com.jimtime.wear.data.DailySummary
 import com.jimtime.wear.data.DailySummaryStore
 import com.jimtime.wear.data.PlanDay
+import com.jimtime.wear.data.PlanDaysStore
+import com.jimtime.wear.data.SportActivity
+import com.jimtime.wear.data.SportsCatalog
 import com.jimtime.wear.presentation.theme.JTColors
 import com.jimtime.wear.presentation.theme.JimTimeWearTheme
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/** Coordinate di una scheda avviabile — o dal nextPlanDay del riepilogo, o dal primo giorno cache. */
+/**
+ * Coordinate di una scheda avviabile — dal `nextPlanDay`/`nextSportDay`
+ * del riepilogo (F7 J13: la PRIMA delle due per `(week, day)`, palestra
+ * a parità), o dal primo giorno cache. `sport != null` ⇒ è una scheda
+ * sport (eventualmente guidata): il tap cerca la [SportActivity] con
+ * `PlanDaysStore.findActivity(week, day, activityId)` (WP-WD).
+ */
 private data class HeroPlanDay(
     val week: Int,
     val day: Int,
     val label: String,
     val exercises: Int,
+    val sport: String? = null,
+    val title: String? = null,
+    val summary: String? = null,
+    val activityId: String? = null,
+    val guided: Boolean = false,
 )
+
+/** `true` se `a` (week,day) viene prima di `b` — ordine usato per scegliere l'hero (J13). */
+private fun isEarlier(aWeek: Int, aDay: Int, bWeek: Int, bDay: Int): Boolean =
+    aWeek < bWeek || (aWeek == bWeek && aDay < bDay)
 
 @Composable
 fun HomeScreen(
@@ -68,19 +86,45 @@ fun HomeScreen(
     planName: String,
     planDays: List<PlanDay>,
     showPhoneNeeded: Boolean = false,
+    pendingSyncItems: List<SessionViewModel.PendingSyncItem> = emptyList(),
     onStartPlanDay: (week: Int, day: Int) -> Unit = { _, _ -> },
+    onStartSportActivity: (SportActivity) -> Unit = {},
+    /** F7 (J13) — hero `nextSportDay` ma la scheda non è (ancora) in cache: stesso messaggio "serve il telefono" del ramo palestra. */
+    onSportActivityNotFound: () -> Unit = {},
     onQuickStart: (String) -> Unit = {},
     onOpenPicker: () -> Unit = {},
     onOpenIntervals: () -> Unit = {},
     onAddWater: (Int) -> Unit = {},
     onRefresh: () -> Unit = {},
+    onOpenPendingSync: () -> Unit = {},
 ) {
     val listState: ScalingLazyListState = rememberScalingLazyListState()
     val today = DailySummaryStore.todayLocal()
     val isFresh = dailySummary != null && dailySummary.date == today
 
-    val hero: HeroPlanDay? = dailySummary?.nextPlanDay?.let {
+    // F7 (J13) — "la prima delle due per (week, day)", palestra a parità
+    // (comportamento preesistente: `nextPlanDay` vinceva già da solo).
+    val planHero = dailySummary?.nextPlanDay?.let {
         HeroPlanDay(it.week, it.day, it.label, it.exercises)
+    }
+    val sportHero = dailySummary?.nextSportDay?.let {
+        HeroPlanDay(
+            week = it.week,
+            day = it.day,
+            label = it.label,
+            exercises = 0,
+            sport = it.sport,
+            title = it.title,
+            summary = it.summary,
+            activityId = it.activityId,
+            guided = it.guided,
+        )
+    }
+    val hero: HeroPlanDay? = when {
+        planHero == null -> sportHero
+        sportHero == null -> planHero
+        isEarlier(sportHero.week, sportHero.day, planHero.week, planHero.day) -> sportHero
+        else -> planHero
     } ?: planDays.firstOrNull()?.let {
         HeroPlanDay(it.week, it.day, it.label, it.exercises)
     }
@@ -108,12 +152,40 @@ fun HomeScreen(
                 ) {
                     item { BrandHeader() }
 
+                    // Subito sotto il titolo, come su Apple Watch: è l'avviso
+                    // che deve saltare all'occhio ("Accedi sul telefono").
+                    // Solo con qualcosa davvero in coda — mirror di
+                    // pendingSyncRow su HomeView.swift lato iOS: prima
+                    // dell'introduzione di questa pagina un item bloccato
+                    // (non loggato, sessione aperta sul telefono, ecc.)
+                    // spariva silenziosamente dietro il vecchio retry
+                    // periodico, senza dire QUALE fosse o PERCHÉ.
+                    if (pendingSyncItems.isNotEmpty()) {
+                        item {
+                            PendingSyncRowHome(
+                                items = pendingSyncItems,
+                                onClick = onOpenPendingSync,
+                            )
+                        }
+                    }
+
                     if (hero != null) {
                         item {
                             HeroPlanCard(
                                 planName = planName,
                                 hero = hero,
-                                onClick = { onStartPlanDay(hero.week, hero.day) },
+                                onClick = {
+                                    if (hero.sport != null) {
+                                        // F7 (J13) — serve la SportActivity in cache per
+                                        // avere `structure`/`profile`: senza, resta il
+                                        // messaggio esistente "serve il telefono".
+                                        val activityId = hero.activityId
+                                        val activity = activityId?.let { PlanDaysStore.findActivity(hero.week, hero.day, it) }
+                                        if (activity != null) onStartSportActivity(activity) else onSportActivityNotFound()
+                                    } else {
+                                        onStartPlanDay(hero.week, hero.day)
+                                    }
+                                },
                             )
                         }
                         if (showPhoneNeeded) {
@@ -279,34 +351,69 @@ private fun HeroPlanCard(planName: String, hero: HeroPlanDay, onClick: () -> Uni
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = planName.ifEmpty { "PROSSIMA SCHEDA" }.uppercase(),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.6.sp,
-                    ),
-                    color = Color.White.copy(alpha = 0.85f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = hero.label.ifEmpty { "Giorno ${hero.day + 1}" },
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    color = Color.White,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = "Sett. ${hero.week} · ${hero.exercises} esercizi",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                    color = Color.White.copy(alpha = 0.85f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = planName.ifEmpty { "PROSSIMA SCHEDA" }.uppercase(),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.6.sp,
+                        ),
+                        color = Color.White.copy(alpha = 0.85f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // F7 (§2.8) — badge "Guidata" sull'hero sport, come sul picker.
+                    if (hero.sport != null && hero.guided) {
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "GUIDATA",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                            color = Color.White,
+                        )
+                    }
+                }
+                if (hero.sport != null) {
+                    // F7 (§2.8) — hero `nextSportDay`: "Sett. N · 🏃 titolo/sport" + summary.
+                    Text(
+                        text = "Sett. ${hero.week} · ${SportsCatalog.emoji(hero.sport)} ${hero.title ?: SportsCatalog.label(hero.sport)}",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        color = Color.White,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!hero.summary.isNullOrEmpty()) {
+                        Text(
+                            text = hero.summary,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = Color.White.copy(alpha = 0.85f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                } else {
+                    Text(
+                        text = hero.label.ifEmpty { "Giorno ${hero.day + 1}" },
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        color = Color.White,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Sett. ${hero.week} · ${hero.exercises} esercizi",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = Color.White.copy(alpha = 0.85f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             Spacer(Modifier.width(6.dp))
             Box(
@@ -387,6 +494,59 @@ private fun NavRow(glyph: String, title: String, onClick: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Text(
+                text = "›",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/// Riga "N allenamenti da inviare" — apre PendingSyncScreen invece di
+/// riprovare direttamente: mirror di pendingSyncRow su HomeView.swift lato
+/// iOS. Sottotitolo diverso se almeno un item è bloccato per login mancante
+/// — il caso più frequente e il più azionabile dal polso.
+@Composable
+private fun PendingSyncRowHome(items: List<SessionViewModel.PendingSyncItem>, onClick: () -> Unit) {
+    val count = items.size
+    val hasNotLoggedIn = items.any {
+        val status = it.status
+        status is SessionViewModel.PendingSyncStatus.Reason && status.reason == "notLoggedIn"
+    }
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val isCompact = screenWidthDp < 200
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(JTColors.warning.copy(alpha = 0.14f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("⬆", fontSize = 14.sp, color = JTColors.warning)
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isCompact) "$count da inviare"
+                           else if (count == 1) "1 allenamento da inviare"
+                           else "$count allenamenti da inviare",
+                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                    maxLines = 2,
+                )
+                Text(
+                    text = if (hasNotLoggedIn) {
+                        if (isCompact) "Accedi sul telefono" else "Accedi a JimTime sul telefono"
+                    } else {
+                        if (isCompact) "Tocca per inviarli" else "Tocca per vederli e inviarli"
+                    },
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = if (hasNotLoggedIn) JTColors.warning else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                )
+            }
             Text(
                 text = "›",
                 style = MaterialTheme.typography.labelMedium,

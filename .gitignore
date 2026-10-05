@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+# F7 (J17) — firma Play: credenziali e chiavi mai nel repo.
+keystore.properties
+*.jks
+*.keystore

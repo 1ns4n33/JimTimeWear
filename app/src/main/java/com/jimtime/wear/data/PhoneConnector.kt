@@ -3,6 +3,7 @@ package com.jimtime.wear.data
 import android.content.Context
 import android.util.Log
 import com.google.android.gms.wearable.Wearable
+import com.jimtime.wear.BuildConfig
 import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
 import org.json.JSONObject
@@ -63,7 +64,22 @@ class PhoneConnector(private val context: Context) {
         // il satellite (mirror SwimSessionDto) letto da SwimSummary.fromWire.
         distanceMeters: Double? = null,
         swim: JSONObject? = null,
+        // F7 (D10, §2.6) — `plan` (PlanActivityRef) per ogni sessione nata
+        // da un giorno di piano, `stepSegments` solo per una guidata con ≥1
+        // segmento. Se il chiamante non li passa (es. un percorso di invio
+        // che legge la coda senza conoscerli) si recuperano dalla voce in
+        // coda con lo stesso syncId: ogni retry li porta sempre.
+        plan: JSONObject? = null,
+        stepSegments: JSONObject? = null,
     ): Boolean {
+        var planOut = plan
+        var segmentsOut = stepSegments
+        if (planOut == null && segmentsOut == null && syncId != null) {
+            PendingRouteStore.loadAll(context).firstOrNull { it.syncId == syncId }?.let { queued ->
+                planOut = queued.planJson?.let { runCatching { JSONObject(it) }.getOrNull() }
+                segmentsOut = queued.stepSegmentsJson?.let { runCatching { JSONObject(it) }.getOrNull() }
+            }
+        }
         return try {
             val nodes = nodeClient.connectedNodes.await()
             if (nodes.isEmpty()) {
@@ -99,6 +115,8 @@ class PhoneConnector(private val context: Context) {
                 if (syncId != null) put("syncId", syncId)
                 if (distanceMeters != null) put("distance", distanceMeters)
                 if (swim != null) put("swim", swim)
+                planOut?.let { put(MessagePaths.KEY_PLAN, it) }
+                segmentsOut?.let { put("stepSegments", it) }
             }.toString().toByteArray()
 
             nodes.forEach { node ->
@@ -108,6 +126,45 @@ class PhoneConnector(private val context: Context) {
             true
         } catch (e: Exception) {
             Log.e("PhoneConnector", "sendRouteToPhone error: $e")
+            false
+        }
+    }
+
+    /// F7 (§2.1, J7) — annuncio di capacità: all'avvio della VM (prima di
+    /// requestPlanDays) e a ogni foreground. Versioni da BuildConfig, mai
+    /// letterali.
+    suspend fun sendHello() {
+        sendJson(
+            JSONObject()
+                .put("cmd", MessagePaths.CMD_WATCH_HELLO)
+                .put("platform", MessagePaths.PLATFORM_WEAR)
+                .put("caps", JSONArray(MessagePaths.WATCH_CAPS))
+                .put("appVersion", BuildConfig.VERSION_NAME)
+                .put("build", "${BuildConfig.VERSION_CODE}"),
+        )
+    }
+
+    /// F7 (D23) — mirror della corsa al polso (`planActivityStarted`/
+    /// `guidedState`/`planActivityEnded`): message-only su PATH_WATCH, solo
+    /// se il telefono è raggiungibile, best-effort (mai in coda).
+    suspend fun sendMirror(payload: JSONObject): Boolean {
+        if (!isPhoneReachable()) return false
+        return sendJson(payload)
+    }
+
+    /// Invia un JSONObject già composto (chiavi annidate incluse) a tutti i
+    /// nodi connessi su PATH_WATCH. `true` solo se almeno un nodo l'ha preso.
+    suspend fun sendJson(payload: JSONObject): Boolean {
+        return try {
+            val nodes = nodeClient.connectedNodes.await()
+            if (nodes.isEmpty()) return false
+            val bytes = payload.toString().toByteArray()
+            nodes.forEach { node ->
+                messageClient.sendMessage(node.id, MessagePaths.PATH_WATCH, bytes).await()
+            }
+            true
+        } catch (e: Exception) {
+            Log.e("PhoneConnector", "sendJson error: $e")
             false
         }
     }

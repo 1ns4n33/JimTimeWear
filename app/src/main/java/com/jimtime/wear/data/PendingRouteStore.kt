@@ -2,6 +2,9 @@ package com.jimtime.wear.data
 
 import android.content.SharedPreferences
 import android.content.Context
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -20,6 +23,22 @@ object PendingRouteStore {
 
     private const val PREFS_NAME = "jimtime_pending_route"
     private const val KEY_ROUTES = "routes"
+
+    // Mirror reattivo della coda — la schermata "Da sincronizzare" osserva
+    // questo invece di richiamare loadAll() a ogni ricomposizione. Stesso
+    // pattern di WaterQueueStore.queue: SharedPreferences resta la fonte di
+    // verità persistita, questo è solo la sua eco in-process (app single
+    // process, vedi manifest — nessun altro processo scrive qui).
+    private val _routes = MutableStateFlow<List<PendingRoute>>(emptyList())
+    val routes: StateFlow<List<PendingRoute>> = _routes.asStateFlow()
+
+    /// Primer del mirror reattivo — chiamato una volta da SessionViewModel.init,
+    /// come PlanDaysStore.load/WaterQueueStore.load. Nome diverso da
+    /// `load(context): PendingRoute?` più sotto (già usato da
+    /// TrackingService.finishAndStop) per non farci collidere le firme.
+    fun refresh(context: Context) {
+        _routes.value = loadAll(context)
+    }
 
     // Vecchie chiavi a slot singolo (pre-queue) — lette una sola volta per
     // migrare dati già scritti su device reali, mai più scritte.
@@ -51,6 +70,12 @@ object PendingRouteStore {
         // WatchActivityPayload anche senza punti GPS) — solo per sessioni
         // routeless come lo swim; null altrove (i punti bastano).
         val distanceMeters: Double? = null,
+        // F7 (D10, §2.6) — `plan` (PlanActivityRef.toUploadJson) e
+        // `stepSegments` (record wire con `source:'watch'`) serializzati;
+        // null per le sessioni libere. Rimandati invariati ad ogni retry;
+        // una voce scritta prima di F7 non ha le chiavi e si legge ancora.
+        val planJson: String? = null,
+        val stepSegmentsJson: String? = null,
     )
 
     /// Accoda una nuova route in attesa di sync — MAI overwrite: due
@@ -106,6 +131,7 @@ object PendingRouteStore {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putString(KEY_ROUTES, arr.toString())
             .apply()
+        _routes.value = routes
     }
 
     private fun routeToJson(route: PendingRoute): JSONObject {
@@ -129,6 +155,8 @@ object PendingRouteStore {
             if (route.syncId != null) put("syncId", route.syncId)
             if (route.swimJson != null) put("swim", JSONObject(route.swimJson))
             if (route.distanceMeters != null) put("distanceMeters", route.distanceMeters)
+            route.planJson?.let { raw -> runCatching { JSONObject(raw) }.getOrNull()?.let { put("plan", it) } }
+            route.stepSegmentsJson?.let { raw -> runCatching { JSONObject(raw) }.getOrNull()?.let { put("stepSegments", it) } }
         }
     }
 
@@ -156,6 +184,8 @@ object PendingRouteStore {
                 syncId       = if (o.has("syncId")) o.optString("syncId") else null,
                 swimJson     = o.optJSONObject("swim")?.toString(),
                 distanceMeters = if (o.has("distanceMeters")) o.optDouble("distanceMeters") else null,
+                planJson     = o.optJSONObject("plan")?.toString(),
+                stepSegmentsJson = o.optJSONObject("stepSegments")?.toString(),
             )
         }.getOrNull()
     }
