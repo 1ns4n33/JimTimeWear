@@ -51,7 +51,25 @@ fun SessionScreen(
     onPause: () -> Unit,
     onResume: () -> Unit,
     isStandalone: Boolean = false,
+    // WP4 (Arti marziali M0) — con una sessione a round (`startSession.combat`)
+    // la rotta mostra CombatRoundScreen al posto della vista libera.
+    offBody: Boolean = false,
+    onSkipRound: () -> Unit = {},
+    onExtendRound: () -> Unit = {},
 ) {
+    if (sessionState.combat != null && !sessionState.isStandalone) {
+        CombatRoundScreen(
+            sessionState = sessionState,
+            heartRate = heartRate,
+            offBody = offBody,
+            onStop = onStop,
+            onPause = onPause,
+            onResume = onResume,
+            onSkip = onSkipRound,
+            onExtend = onExtendRound,
+        )
+        return
+    }
     val accent = JTColors.activity(sessionState.activityType)
     // F7 (D24) — con la striscia companion visibile il budget del 192 dp
     // non basta più per tutto invariato (misurato allo screenshot: i

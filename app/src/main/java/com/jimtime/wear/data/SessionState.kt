@@ -58,6 +58,42 @@ data class SwimData(
     val workout: SwimWorkoutWire? = null,
 )
 
+/// WP4 (Arti marziali M0, N9) — `startSession.combat` dal telefono: serve al
+/// titolo prima del primo mirror `guidedStep`.
+data class CombatMeta(
+    val discipline: String,
+    val rounds: Int,
+    val workSec: Int,
+    val restSec: Int,
+    /// M2 — `true` per una scheda a blocchi (workSec/restSec = 0: niente
+    /// estrapolazione locale delle fasi). Assente = seduta libera.
+    val plan: Boolean = false,
+) {
+    companion object {
+        /// Rete di sicurezza: un mirror `kind:"combat"` senza `startSession.combat`
+        /// (telefono che lo scartava) → meta minimo; workSec/restSec ignoti = 0
+        /// (il fallback locale delle fasi allora non avanza da solo).
+        fun fromMirror(step: GuidedStepMirror, activityType: String): CombatMeta? {
+            if (!step.isCombat || step.roundTotal <= 0) return null
+            return CombatMeta(discipline = activityType, rounds = step.roundTotal, workSec = 0, restSec = 0)
+        }
+
+        /// `null` se il payload non ha `combat` (build vecchie del telefono).
+        fun fromWire(o: org.json.JSONObject?): CombatMeta? {
+            if (o == null) return null
+            val discipline = o.optString("discipline")
+            if (discipline.isEmpty()) return null
+            return CombatMeta(
+                discipline = discipline,
+                rounds = o.optInt("rounds", 0),
+                workSec = o.optInt("workSec", 0),
+                restSec = o.optInt("restSec", 0),
+                plan = o.optBoolean("plan", false),
+            )
+        }
+    }
+}
+
 /// F7 (D24, F2 §2.4) — fase corrente di una corsa guidata DAL TELEFONO
 /// (companion F1), spinta con `guidedStep` ogni ~5 s e al cambio fase.
 /// [receivedAtMs] = orologio del polso alla ricezione: la striscia vale
@@ -72,11 +108,51 @@ data class GuidedStepMirror(
     val endsAt: Long?,
     val finished: Boolean,
     val receivedAtMs: Long,
+    // WP4 (Arti marziali M0, N9) — tutti opzionali: assenti = mirror F1 di prima.
+    /// `"combat"` per i round; `null` per le altre guide del telefono.
+    val kind: String? = null,
+    /// `"prep" | "work" | "rest"` (solo kind combat); M2: `"timed"` (blocco a
+    /// tempo senza round) e `"reps"` (blocco a ripetizioni, chiuso da «Fatto»).
+    val phase: String? = null,
+    /// 1-based, 0 durante `prep`.
+    val roundIndex: Int = 0,
+    val roundTotal: Int = 0,
+    val roundType: String? = null,
+    val paused: Boolean = false,
+    /// M2 — secondi pianificati dello step (0 = ignoto / `reps`).
+    val phaseSec: Int = 0,
+    /// M2 — ripetizioni del blocco (0 = non a ripetizioni).
+    val reps: Int = 0,
 ) {
     fun isFresh(nowMs: Long): Boolean = nowMs - receivedAtMs < VALID_MS
 
+    val isCombat: Boolean get() = kind == "combat"
+
     companion object {
         const val VALID_MS = 60_000L
+
+        /// Parser unico del mirror `guidedStep` (PhoneMessageService); i campi
+        /// combat mancanti restano ai default ⇒ payload F1 invariato.
+        fun fromWire(json: org.json.JSONObject, receivedAtMs: Long): GuidedStepMirror =
+            GuidedStepMirror(
+                index = json.optInt("index", 0),
+                total = json.optInt("total", 0),
+                label = json.optString("label"),
+                remaining = json.optString("remaining"),
+                target = json.optString("target"),
+                next = (json.opt("next") as? String)?.takeIf { it.isNotEmpty() },
+                endsAt = (json.opt("endsAt") as? Number)?.toLong(),
+                finished = json.optBoolean("finished", false),
+                receivedAtMs = receivedAtMs,
+                kind = (json.opt("kind") as? String)?.takeIf { it.isNotEmpty() },
+                phase = (json.opt("phase") as? String)?.takeIf { it.isNotEmpty() },
+                roundIndex = json.optInt("roundIndex", 0),
+                roundTotal = json.optInt("roundTotal", 0),
+                roundType = (json.opt("roundType") as? String)?.takeIf { it.isNotEmpty() },
+                paused = json.optBoolean("paused", false),
+                phaseSec = json.optInt("phaseSec", 0).coerceAtLeast(0),
+                reps = json.optInt("reps", 0).coerceAtLeast(0),
+            )
     }
 }
 
@@ -104,6 +180,9 @@ data class SessionState(
     val guidedVariant: String? = null,
     /// Companion (D24): ultima fase spinta dal telefono, null se nessuna.
     val guidedStep: GuidedStepMirror? = null,
+    // ── WP4 Arti marziali M0 ─────────────────────────────────────────────
+    /// Sessione a round guidata dal telefono (`startSession.combat`).
+    val combat: CombatMeta? = null,
 ) {
     val paceSecondsPerKm: Double
         get() = if (distanceMeters > 100 && elapsedSeconds > 0)

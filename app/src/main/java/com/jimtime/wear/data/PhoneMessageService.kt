@@ -79,7 +79,7 @@ class PhoneMessageService : WearableListenerService() {
                         workout = it.optJSONObject("workout")?.let(SwimWorkoutWire::fromWire),
                     )
                 }
-                SessionRepository.startSession(type, startedAt, swim)
+                SessionRepository.startSession(type, startedAt, swim, CombatMeta.fromWire(json.optJSONObject("combat")))
                 if (swim != null) {
                     ContextCompat.startForegroundService(
                         applicationContext,
@@ -98,6 +98,8 @@ class PhoneMessageService : WearableListenerService() {
                 PlanDaysStore.applyPayload(applicationContext, json)
             }
             MessagePaths.CMD_GUIDED_STEP -> handleGuidedStep(json)
+            // M1 (timer di sala §7.5) — telecomando: lo store scarta i seq vecchi.
+            MessagePaths.CMD_ROOM_TIMER -> RoomTimerStore.apply(json)
             // F5b (Nuoto, §7) — `WearableBridge.sendSwimWorkouts` inoltra
             // verbatim su questo stesso path, come planDays/intervalConfig
             // (vedi commento lì) — MAI più applicationContext: qui è un
@@ -161,17 +163,7 @@ class PhoneMessageService : WearableListenerService() {
             return
         }
         SessionRepository.updateGuidedStep(
-            GuidedStepMirror(
-                index = json.optInt("index", 0),
-                total = json.optInt("total", 0),
-                label = json.optString("label"),
-                remaining = json.optString("remaining"),
-                target = json.optString("target"),
-                next = (json.opt("next") as? String)?.takeIf { it.isNotEmpty() },
-                endsAt = (json.opt("endsAt") as? Number)?.toLong(),
-                finished = json.optBoolean("finished", false),
-                receivedAtMs = System.currentTimeMillis(),
-            ),
+            GuidedStepMirror.fromWire(json, System.currentTimeMillis()),
         )
     }
 

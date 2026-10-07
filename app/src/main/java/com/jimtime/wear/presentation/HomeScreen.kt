@@ -97,6 +97,9 @@ fun HomeScreen(
     onAddWater: (Int) -> Unit = {},
     onRefresh: () -> Unit = {},
     onOpenPendingSync: () -> Unit = {},
+    /** M1 — c'è una lezione di sala live: riga «Telecomando» per (ri)aprire il remoto. */
+    remoteLive: Boolean = false,
+    onOpenRemote: () -> Unit = {},
 ) {
     val listState: ScalingLazyListState = rememberScalingLazyListState()
     val today = DailySummaryStore.todayLocal()
@@ -160,6 +163,10 @@ fun HomeScreen(
                     // (non loggato, sessione aperta sul telefono, ecc.)
                     // spariva silenziosamente dietro il vecchio retry
                     // periodico, senza dire QUALE fosse o PERCHÉ.
+                    if (remoteLive) {
+                        item { RemoteRowHome(onClick = onOpenRemote) }
+                    }
+
                     if (pendingSyncItems.isNotEmpty()) {
                         item {
                             PendingSyncRowHome(
@@ -547,6 +554,36 @@ private fun PendingSyncRowHome(items: List<SessionViewModel.PendingSyncItem>, on
                     maxLines = 2,
                 )
             }
+            Text(
+                text = "›",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/// M1 — riga «Telecomando» (timer di sala live): unico punto d'ingresso dopo
+/// che l'atleta ha chiuso il remoto con lo swipe.
+@Composable
+private fun RemoteRowHome(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(JTColors.brandBright.copy(alpha = 0.16f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("⏱", fontSize = 14.sp, color = JTColors.brandBright)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Telecomando",
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
             Text(
                 text = "›",
                 style = MaterialTheme.typography.labelMedium,

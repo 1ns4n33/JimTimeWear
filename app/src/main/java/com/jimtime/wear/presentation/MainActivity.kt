@@ -31,6 +31,7 @@ import com.jimtime.wear.data.PendingRouteStore
 import com.jimtime.wear.data.PendingSyncCoordinator
 import com.jimtime.wear.data.PendingSyncStatusStore
 import com.jimtime.wear.data.PlanDaysStore
+import com.jimtime.wear.data.RoomTimerStore
 import com.jimtime.wear.data.SessionRepository
 import com.jimtime.wear.data.WristGuidedStart
 import com.jimtime.wear.guided.GuidedRunRepository
@@ -108,6 +109,12 @@ class MainActivity : ComponentActivity() {
             maybeSeedFakeGuided(intent)
             maybeSeedFakeSportDays(intent)
             maybeSeedFakeCompanion(intent)
+            // M1: `--es JT_FAKE_ROOM_TIMER work|rest|paused|stale|ended`.
+            intent.getStringExtra("JT_FAKE_ROOM_TIMER")?.let(RoomTimerDebugHook::apply)
+            // WP4: `--es JT_FAKE_COMBAT work|rest|offbody` (vedi CombatDebugHook).
+            if (!SessionRepository.state.value.isActive) {
+                intent.getStringExtra("JT_FAKE_COMBAT")?.let(CombatDebugHook::apply)
+            }
         }
         val openPendingSyncOnStart = BuildConfig.DEBUG &&
             intent.getBooleanExtra("JT_OPEN_PENDING_SYNC", false)
@@ -120,6 +127,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val sessionState     by viewModel.sessionState.collectAsStateWithLifecycle()
             val heartRate        by viewModel.heartRate.collectAsStateWithLifecycle()
+            val offBody          by viewModel.offBody.collectAsStateWithLifecycle()
             val planDays         by viewModel.planDays.collectAsStateWithLifecycle()
             val planName         by viewModel.planName.collectAsStateWithLifecycle()
             // F7 (§2.9/J13) — `sportDays` sorgente `PlanDaysStore.sportDays`
@@ -136,6 +144,8 @@ class MainActivity : ComponentActivity() {
             val swimGuide        by viewModel.swimGuide.collectAsStateWithLifecycle()
             val swimWorkouts     by viewModel.swimWorkouts.collectAsStateWithLifecycle()
             val pendingSyncItems by viewModel.pendingSyncItems.collectAsStateWithLifecycle()
+
+            val remoteState      by RoomTimerStore.state.collectAsStateWithLifecycle()
 
             val navController = rememberSwipeDismissableNavController()
 
@@ -192,6 +202,8 @@ class MainActivity : ComponentActivity() {
                         onAddWater         = { delta -> viewModel.addWater(delta) },
                         onRefresh          = { viewModel.requestDailySummary() },
                         onOpenPendingSync  = { navController.navigate("pendingSync") },
+                        remoteLive         = remoteState?.isEnded == false,
+                        onOpenRemote       = { navController.navigate("remote") { launchSingleTop = true } },
                     )
                 }
                 composable("pendingSync") {
@@ -251,6 +263,21 @@ class MainActivity : ComponentActivity() {
                         onCancel = { navController.popBackStack() },
                     )
                 }
+                composable("remote") {
+                    // M1 — telecomando del timer di sala. Se lo stato sparisce
+                    // (clear/fine lezione) l'effetto sotto torna a "idle".
+                    remoteState?.let { rs ->
+                        RoomTimerRemoteScreen(
+                            state     = rs,
+                            onPause   = viewModel::rtPause,
+                            onResume  = viewModel::rtResume,
+                            onSkip    = viewModel::rtSkip,
+                            onExtend  = viewModel::rtExtend,
+                            onRepeat  = viewModel::rtRepeat,
+                            onRefresh = viewModel::requestRoomTimer,
+                        )
+                    }
+                }
                 composable("session") {
                     // Single route, multiple layouts — the phone/wrist tag
                     // the session as `workout`/`swim`/`guided`/`activity`.
@@ -294,11 +321,31 @@ class MainActivity : ComponentActivity() {
                             sessionState = sessionState,
                             heartRate    = heartRate,
                             isStandalone = sessionState.isStandalone,
+                            offBody      = offBody,
+                            onSkipRound  = viewModel::skipRoundFromWatch,
+                            onExtendRound = viewModel::extendRoundFromWatch,
                             onStop       = viewModel::stopFromWatch,
                             onPause      = viewModel::pauseFromWatch,
                             onResume     = viewModel::resumeFromWatch,
                         )
                     }
+                }
+            }
+
+            // M1 — arriva uno stato live e si è in "idle" ⇒ telecomando; lo
+            // stato sparisce ⇒ di nuovo "idle". Chiave = episodio (cresce a ogni
+            // nuova lezione dopo null/ended): uno swipe-dismiss non viene
+            // riaperto a ogni battito, ma un nuovo live dopo un dismiss o una
+            // lezione finita sì. Se è già stata chiusa, resta la riga in home.
+            val remoteEpisode = remoteState?.episode
+            LaunchedEffect(remoteEpisode) {
+                val route = navController.currentDestination?.route
+                if (remoteEpisode != null) {
+                    if (route == "idle" && !SessionRepository.state.value.isActive) {
+                        navController.navigate("remote") { launchSingleTop = true }
+                    }
+                } else if (route == "remote") {
+                    navController.popBackStack("idle", inclusive = false)
                 }
             }
 

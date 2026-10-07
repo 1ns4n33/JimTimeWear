@@ -45,6 +45,27 @@ object GuidedHaptics {
 
     private val COUNTDOWN_CLICK = longArrayOf(0, 30)
 
+    /// M2 — un tocco al polso all'inizio e alla fine di un blocco a
+    /// ripetizioni (nessun `endsAt`: niente conto alla rovescia né fine nota).
+    fun repsTap(context: Context) {
+        val vibrator = context.getSystemService(Vibrator::class.java) ?: return
+        vibrator.vibrate(VibrationEffect.createWaveform(REPS_TAP, -1))
+    }
+
+    private val REPS_TAP = longArrayOf(0, 120)
+
+    /// M1 (timer di sala) — −10 s dalla fine della fase: due impulsi corti.
+    fun roomWarn(context: Context) {
+        val vibrator = context.getSystemService(Vibrator::class.java) ?: return
+        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 80, 80, 80), -1))
+    }
+
+    /// M1 (timer di sala) — fine fase: un impulso lungo.
+    fun roomEnd(context: Context) {
+        val vibrator = context.getSystemService(Vibrator::class.java) ?: return
+        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 300), -1))
+    }
+
     /**
      * Timing/amplitude `[0, onMs, offMs, onMs, ...]` di `createWaveform`
      * (il primo valore è un delay iniziale, qui sempre 0). `-1` = nessuna

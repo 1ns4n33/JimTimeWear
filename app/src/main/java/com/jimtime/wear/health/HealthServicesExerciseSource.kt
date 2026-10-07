@@ -2,18 +2,41 @@ package com.jimtime.wear.health
 
 import android.content.Context
 import androidx.health.services.client.ExerciseUpdateCallback
+import androidx.health.services.client.MeasureCallback
 import androidx.health.services.client.HealthServices
 import androidx.health.services.client.data.Availability
+import androidx.health.services.client.data.DataPointContainer
 import androidx.health.services.client.data.DataType
+import androidx.health.services.client.data.DataTypeAvailability
+import androidx.health.services.client.data.DeltaDataType
 import androidx.health.services.client.data.ExerciseConfig
 import androidx.health.services.client.data.ExerciseEvent
 import androidx.health.services.client.data.ExerciseLapSummary
 import androidx.health.services.client.data.ExerciseType
 import androidx.health.services.client.data.ExerciseUpdate
 import androidx.concurrent.futures.await
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+
+/// WP4 (Arti marziali M0, D7) — segnale «orologio tolto» dal polso.
+enum class WristEvent { OFF_BODY, BACK }
+
+/// Puro (testabile): `HEART_RATE_BPM` + `UNAVAILABLE_DEVICE_OFF_BODY` ⇒
+/// [WristEvent.OFF_BODY], `AVAILABLE` ⇒ [WristEvent.BACK]; ogni altro
+/// stato (ACQUIRING, UNAVAILABLE generico) o data type ⇒ `null`, mai un
+/// falso «tolto» mentre il sensore sta solo agganciando il battito.
+internal fun wristEventFor(isHeartRate: Boolean, availability: Availability): WristEvent? {
+    if (!isHeartRate) return null
+    return when (availability) {
+        DataTypeAvailability.UNAVAILABLE_DEVICE_OFF_BODY -> WristEvent.OFF_BODY
+        DataTypeAvailability.AVAILABLE -> WristEvent.BACK
+        else -> null
+    }
+}
 
 /**
  * F5b (Nuoto, Wear OS) — sorgente sensori dedicata ESCLUSIVAMENTE alle
@@ -64,6 +87,45 @@ class HealthServicesExerciseSource(context: Context) {
 
     private var callbackRegistered = false
 
+    /// WP4 — eventi polso (off-body / di nuovo al polso). Alimentato sia dal
+    /// callback dell'esercizio (nuoto) sia da [startWristMonitor] (sessioni
+    /// companion senza ExerciseClient, es. round di combattimento).
+    private val _wristEvents = MutableSharedFlow<WristEvent>(extraBufferCapacity = 8)
+    val wristEvents: SharedFlow<WristEvent> = _wristEvents.asSharedFlow()
+
+    internal fun emitWrist(event: WristEvent) {
+        _wristEvents.tryEmit(event)
+    }
+
+    private val measureClient = HealthServices.getClient(context.applicationContext).measureClient
+    private var measureRegistered = false
+
+    private val measureCallback = object : MeasureCallback {
+        override fun onAvailabilityChanged(dataType: DeltaDataType<*, *>, availability: Availability) {
+            wristEventFor(dataType == DataType.HEART_RATE_BPM, availability)?.let(::emitWrist)
+        }
+        override fun onDataReceived(data: DataPointContainer) {}
+    }
+
+    /// Ascolta SOLO la disponibilità di `HEART_RATE_BPM` (MeasureClient) per
+    /// una sessione dove il polso non ha un ExerciseClient attivo. Idempotente;
+    /// ogni errore (permesso negato, capability assente) è assorbito.
+    suspend fun startWristMonitor() {
+        if (measureRegistered) return
+        runCatching {
+            measureClient.registerMeasureCallback(DataType.HEART_RATE_BPM, measureCallback)
+            measureRegistered = true
+        }
+    }
+
+    suspend fun stopWristMonitor() {
+        if (!measureRegistered) return
+        measureRegistered = false
+        runCatching {
+            measureClient.unregisterMeasureCallbackAsync(DataType.HEART_RATE_BPM, measureCallback).await()
+        }
+    }
+
     private val callback = object : ExerciseUpdateCallback {
         override fun onRegistered() {}
         override fun onRegistrationFailed(throwable: Throwable) {}
@@ -96,7 +158,9 @@ class HealthServicesExerciseSource(context: Context) {
         }
 
         override fun onLapSummaryReceived(lapSummary: ExerciseLapSummary) {}
-        override fun onAvailabilityChanged(dataType: DataType<*, *>, availability: Availability) {}
+        override fun onAvailabilityChanged(dataType: DataType<*, *>, availability: Availability) {
+            wristEventFor(dataType == DataType.HEART_RATE_BPM, availability)?.let(::emitWrist)
+        }
         override fun onExerciseEventReceived(event: ExerciseEvent) {}
     }
 

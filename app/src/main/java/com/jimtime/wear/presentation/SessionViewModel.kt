@@ -42,6 +42,8 @@ import com.jimtime.wear.guided.ResolvedStructure
 import com.jimtime.wear.health.SwimGuideRep
 import com.jimtime.wear.health.SwimGuideRepository
 import com.jimtime.wear.health.SwimPayloadBuilder
+import com.jimtime.wear.health.WristEvent
+import com.jimtime.wear.health.hrUpdateToSend
 import com.jimtime.wear.health.TrackingEngine
 import com.jimtime.wear.health.TrackingService
 import kotlinx.coroutines.Job
@@ -51,6 +53,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -163,6 +166,12 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     private val _lastUsedType = MutableStateFlow(prefs.getString(KEY_LAST_USED_TYPE, null))
     val lastUsedType: StateFlow<String?> = _lastUsedType.asStateFlow()
 
+    /// WP4 (Arti marziali M0, D7) — «orologio tolto» (off-body) durante una
+    /// sessione a round: la schermata lo mostra e il telefono riceve
+    /// `sensorsLost{reason:"offBody"}` / `sensorsBack`.
+    private val _offBody = MutableStateFlow(false)
+    val offBody: StateFlow<Boolean> = _offBody.asStateFlow()
+
     private var timerJob: Job? = null
     private var hrSendJob: Job? = null
     private var retryJob: Job? = null
@@ -192,6 +201,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             phoneConnector.sendHello()
             phoneConnector.sendToPhone(MessagePaths.CMD_REQUEST_PLAN_DAYS)
+            phoneConnector.sendToPhone(MessagePaths.CMD_REQUEST_ROOM_TIMER, mapOf("type" to MessagePaths.CMD_REQUEST_ROOM_TIMER))
         }
         requestDailySummary()
         // Un nuovo dailySummary è la prova che il phone è vivo — flush
@@ -218,6 +228,69 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                     PendingGymStore.clear(application)
                 }
             }
+        }
+        // WP4 — segnale polso: solo per una sessione a round guidata dal
+        // telefono (non standalone); la copertura FC la decidono i campioni.
+        viewModelScope.launch {
+            TrackingEngine.swimSource.wristEvents.collect { ev ->
+                val st = SessionRepository.state.value
+                if (st.combat == null || st.isStandalone) return@collect
+                val off = ev == WristEvent.OFF_BODY
+                _offBody.value = off
+                if (off) {
+                    phoneConnector.sendToPhone(
+                        MessagePaths.CMD_SENSORS_LOST,
+                        mapOf(
+                            "type" to MessagePaths.CMD_SENSORS_LOST,
+                            "reason" to MessagePaths.REASON_OFF_BODY,
+                        ),
+                    )
+                } else {
+                    phoneConnector.sendToPhone(
+                        MessagePaths.CMD_SENSORS_BACK,
+                        mapOf("type" to MessagePaths.CMD_SENSORS_BACK),
+                    )
+                }
+            }
+        }
+        // WP4 — `onAccuracyChanged` NO_CONTACT del sensore FC = orologio tolto
+        // anche quando la disponibilità di Health Services non lo segnala.
+        viewModelScope.launch {
+            TrackingEngine.workoutManager.noContact.collect { noContact ->
+                val st = SessionRepository.state.value
+                if (st.combat == null || st.isStandalone) return@collect
+                if (noContact == _offBody.value) return@collect
+                _offBody.value = noContact
+                if (noContact) {
+                    phoneConnector.sendToPhone(
+                        MessagePaths.CMD_SENSORS_LOST,
+                        mapOf(
+                            "type" to MessagePaths.CMD_SENSORS_LOST,
+                            "reason" to MessagePaths.REASON_OFF_BODY,
+                        ),
+                    )
+                } else {
+                    phoneConnector.sendToPhone(
+                        MessagePaths.CMD_SENSORS_BACK,
+                        mapOf("type" to MessagePaths.CMD_SENSORS_BACK),
+                    )
+                }
+            }
+        }
+        // WP4 — l'ascolto di HEART_RATE_BPM (MeasureClient) vive quanto la
+        // sessione a round; a fine sessione il flag si azzera.
+        viewModelScope.launch {
+            sessionState
+                .map { it.isActive && it.combat != null && !it.isStandalone }
+                .distinctUntilChanged()
+                .collect { combatLive ->
+                    if (combatLive) {
+                        TrackingEngine.swimSource.startWristMonitor()
+                    } else {
+                        TrackingEngine.swimSource.stopWristMonitor()
+                        _offBody.value = false
+                    }
+                }
         }
         viewModelScope.launch {
             sessionState.collect { state ->
@@ -559,6 +632,44 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // ── WP4 round guidati dal telefono ─────────────────────────────────────
+
+    /// «Salta» round/fase: il telefono (autorità) avanza lo step.
+    fun skipRoundFromWatch() {
+        viewModelScope.launch { phoneConnector.sendToPhone(
+                MessagePaths.CMD_GUIDED_SKIP,
+                mapOf("type" to MessagePaths.CMD_GUIDED_SKIP),
+            ) }
+    }
+
+    /// «+30″» sulla fase corrente.
+    fun extendRoundFromWatch() {
+        viewModelScope.launch {
+            phoneConnector.sendToPhone(
+                MessagePaths.CMD_GUIDED_EXTEND,
+                mapOf(
+                    "type" to MessagePaths.CMD_GUIDED_EXTEND,
+                    "sec" to MessagePaths.GUIDED_EXTEND_SEC,
+                ),
+            )
+        }
+    }
+
+    // ── M1 telecomando timer di sala (§7.2) ───────────────────────────────
+    // Stesso schema di guidedSkip: `cmd` + `type`; il telefono ignora tutto
+    // se il timer non è attivo.
+
+    private fun sendRt(cmd: String, extras: Map<String, Any?> = emptyMap()) {
+        viewModelScope.launch { phoneConnector.sendToPhone(cmd, mapOf<String, Any?>("type" to cmd) + extras) }
+    }
+
+    fun rtPause() = sendRt(MessagePaths.CMD_RT_PAUSE)
+    fun rtResume() = sendRt(MessagePaths.CMD_RT_RESUME)
+    fun rtSkip() = sendRt(MessagePaths.CMD_RT_SKIP)
+    fun rtExtend() = sendRt(MessagePaths.CMD_RT_EXTEND, mapOf("sec" to MessagePaths.RT_EXTEND_SEC))
+    fun rtRepeat() = sendRt(MessagePaths.CMD_RT_REPEAT)
+    fun requestRoomTimer() = sendRt(MessagePaths.CMD_REQUEST_ROOM_TIMER)
+
     // ── Workout actions (kind == WORKOUT) ─────────────────────────────────
 
     /// "Fatto" tap on the watch. Reps/weight are sent only when the
@@ -697,6 +808,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     /// flush di eventuali delta rimasti in coda da prima del background.
     fun onForeground() {
         viewModelScope.launch { phoneConnector.sendHello() }
+        requestRoomTimer()
         requestDailySummary()
         flushWaterQueue()
     }
@@ -813,8 +925,12 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         hrSendJob = viewModelScope.launch {
             while (true) {
                 delay(3_000)
-                val bpm = TrackingEngine.workoutManager.heartRate.value
-                if (bpm > 0 && !SessionRepository.state.value.isStandalone) {
+                val wm = TrackingEngine.workoutManager
+                val bpm = hrUpdateToSend(
+                    wm.heartRate.value, wm.lastSampleAtMs, System.currentTimeMillis(),
+                    offBody = _offBody.value || wm.noContact.value,
+                )
+                if (bpm != null && !SessionRepository.state.value.isStandalone) {
                     phoneConnector.sendToPhone(
                         """{"cmd":"hrUpdate","bpm":$bpm}"""
                     )

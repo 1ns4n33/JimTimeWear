@@ -72,7 +72,7 @@ object SessionRepository {
     private fun resetClock(baseActiveMs: Long, running: Boolean) =
         synchronized(clock) { clock.reset(baseActiveMs, running, monoNow()) }
 
-    fun startSession(type: String, startedAt: Long, swim: SwimData? = null) {
+    fun startSession(type: String, startedAt: Long, swim: SwimData? = null, combat: CombatMeta? = null) {
         val alreadyElapsed = ((System.currentTimeMillis() - startedAt) / 1000L).coerceAtLeast(0L)
         resetClock(alreadyElapsed * 1000L, running = true)
         _state.value = SessionState(
@@ -90,6 +90,7 @@ object SessionRepository {
             kind           = SessionKind.ACTIVITY,
             workout        = null,
             swim           = swim,
+            combat         = combat,
         )
     }
 
@@ -126,7 +127,10 @@ object SessionRepository {
     fun updateGuidedStep(step: GuidedStepMirror) {
         val current = _state.value
         if (!current.isActive || current.guided) return
-        _state.value = current.copy(guidedStep = step)
+        // Rete di sicurezza: mirror combat ma `startSession.combat` mai arrivato.
+        val meta = current.combat
+            ?: if (!current.isStandalone) CombatMeta.fromMirror(step, current.activityType) else null
+        _state.value = current.copy(guidedStep = step, combat = meta)
     }
 
     /// F5b — aggregati correnti dal `HealthServicesExerciseSource` di

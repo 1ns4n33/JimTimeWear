@@ -29,6 +29,27 @@ object MessagePaths {
     const val CMD_COMPLETE_SET   = "completeSet"
     const val CMD_SKIP_REST      = "skipRest"
 
+    // WP4 (Arti marziali M0, N9) — round guidati dal telefono: salta/estendi
+    // dal polso e segnale polso (pausa/ripresa riusano pauseActivity/
+    // resumeActivity già gestiti dal telefono per l'indoor).
+    const val CMD_GUIDED_SKIP   = "guidedSkip"
+    const val CMD_GUIDED_EXTEND = "guidedExtend"
+    const val CMD_SENSORS_LOST  = "sensorsLost"
+    const val CMD_SENSORS_BACK  = "sensorsBack"
+    const val REASON_OFF_BODY   = "offBody"
+    const val GUIDED_EXTEND_SEC = 30
+
+    // M1 (Arti marziali, timer di sala §7.1-7.3) — telecomando del timer di
+    // sala del coach: `roomTimer` phone → watch; i `rt*` watch → phone.
+    const val CMD_ROOM_TIMER         = "roomTimer"
+    const val CMD_RT_PAUSE           = "rtPause"
+    const val CMD_RT_RESUME          = "rtResume"
+    const val CMD_RT_SKIP            = "rtSkip"
+    const val CMD_RT_EXTEND          = "rtExtend"
+    const val CMD_RT_REPEAT          = "rtRepeat"
+    const val CMD_REQUEST_ROOM_TIMER = "requestRoomTimer"
+    const val RT_EXTEND_SEC          = 30
+
     const val CMD_STOP_FROM_WATCH  = "stopActivity"
     const val CMD_PAUSE_FROM_WATCH = "pauseActivity"
     const val CMD_RESUME_FROM_WATCH = "resumeActivity"
@@ -99,7 +120,7 @@ object MessagePaths {
     const val KEY_PLAN   = "plan"
 
     const val PLATFORM_WEAR = "wear"
-    val WATCH_CAPS = listOf("guidedRunV1", "sportDaysV1", "guidedMultiV1")
+    val WATCH_CAPS = listOf("guidedRunV1", "sportDaysV1", "guidedMultiV1", "combatRoundsV1", "roomTimerV1")
 
     /// Extra dell'Intent che apre MainActivity da PhoneMessageService (avvio
     /// dal telefono) o dal chip OngoingActivity: MainActivity naviga alla

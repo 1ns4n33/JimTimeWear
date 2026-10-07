@@ -50,7 +50,15 @@ object SportsCatalog {
         SportsCatalogEntry("beach_volley", "Beach volley", "🏐", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
         SportsCatalogEntry("calcio5", "Calcio a 5", "⚽", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
         SportsCatalogEntry("rowing_machine", "Vogatore", "🚣", enabled = true, watch = false, watchWear = false, outdoorGps = false, indoor = true),
-        SportsCatalogEntry("boxing", "Boxe", "🥊", enabled = false, watch = false, watchWear = false, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("boxing", "Boxe", "🥊", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("kickboxing", "Kickboxing", "🥊", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("muay_thai", "Muay thai", "🥊", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("mma", "MMA", "🥋", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("bjj", "Jiu-jitsu brasiliano", "🥋", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("judo", "Judo", "🥋", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("karate", "Karate", "🥋", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("taekwondo", "Taekwondo", "🥋", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
+        SportsCatalogEntry("krav_maga", "Krav maga", "🥋", enabled = true, watch = true, watchWear = true, outdoorGps = false, indoor = false),
     )
 
     val watchOutdoorIds: List<String> = all.filter { it.watchWear && it.outdoorGps }.map { it.id }
